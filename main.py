@@ -28,16 +28,20 @@ else:
             f4.write(username_key)
 
 # 조회 날짜 설정 (조회하고 싶은 일자로 수정 가능)
-#today = datetime.now()
-#today = datetime(2025,6,10,23,59,59,9999)
-date_input = input("# 조회를 원하는 날짜를 입력하세요 (예: 2025-06-16): ")
-try:
-    d = datetime.strptime(date_input, "%Y-%m-%d")
-    print("  입력한 날짜:", d.date())
-    today = datetime(d.year, d.month, d.day, 23, 59, 59)
-    #print(today)
-except ValueError:
-    print("  날짜 형식이 올바르지 않습니다. (예: 2025-06-16)")
+print("# 원하는 날짜를 입력하세요.")
+print("  예 : 2025-06-16")
+print(f"  그냥 엔터를 치면 오늘 기준입니다 : {datetime.now().strftime("%Y-%m-%d")}")
+date_input = input()
+if date_input == "":
+    date_input = datetime.now()
+    d = date_input
+else:
+    try:
+        d = datetime.strptime(date_input, "%Y-%m-%d")
+    except ValueError:
+        print("  날짜 형식이 올바르지 않습니다. (예: 2025-06-16)")
+print("  입력한 날짜:", d.date())
+today = datetime(d.year, d.month, d.day, 23, 59, 59)
 
 start_date_str = (today - timedelta(days=0)).strftime("%Y-%m-%d")
 end_date_str = today.strftime("%Y-%m-%d")
@@ -101,7 +105,8 @@ except NameError:
 print(f"  기존 총 업무시간 : {total_hours}:{remaining_minutes}:{seconds}")
 
 # 원하는 총 업무시간 설정 (0을 입력하면 원래값 그대로 유지)
-workingtime_input = input("# 원하는 총 업무시간을 입력하세요 (예: 8) (0을 입력하면 원래값 그대로 유지): ")
+print("# 0을 입력하면 원래값 그대로 유지됩니다.")
+workingtime_input = input(f"  원하는 총 업무시간을 입력하세요 (예:{total_hours}) : ")
 workingtime_seconds = int(workingtime_input)*3600
 
 # 새로 입력한 총 업무시간에서 기존의 총 업무시간을 나눈 비율
