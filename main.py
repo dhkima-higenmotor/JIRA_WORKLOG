@@ -1,7 +1,7 @@
 import requests
 from requests.auth import HTTPBasicAuth
 from datetime import datetime, timedelta
-import json
+import os
 
 # JIRA 접속 정보 설정
 base_url = "https://higen-rnd.atlassian.net/rest/api/2/"
@@ -16,6 +16,16 @@ response1 = requests.get(f"{base_url}/user/search", auth=(user_email,jira_api_to
 if response1.status_code == 200 and response1.json():
     username_key = response1.json()[0]["accountId"]
     displayName_to_check = response1.json()[0]["displayName"]
+else:
+    if os.path.exists("acopuntID.txt"):
+        with open("acopuntID.txt", "r") as f3:
+            username_key = f3.read().strip()
+    else:
+        print("# 아래 URL을 웹브라우저에 복사해 넣어서 acountID를 확인하세요.")
+        print(f"https://higen-rnd.atlassian.net/rest/api/2/user/search?query={user_email}")
+        username_key = input("# acountID를 입력하세요 : ")
+        with open("acopuntID.txt", "w") as f4:
+            f4.write(username_key)
 
 # 조회 날짜 설정 (조회하고 싶은 일자로 수정 가능)
 #today = datetime.now()
