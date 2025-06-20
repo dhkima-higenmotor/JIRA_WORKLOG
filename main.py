@@ -22,16 +22,26 @@ else:
             username_key = f3.read().strip()
     else:
         print("# 아래 URL을 웹브라우저에 복사해 넣어서 acountID를 확인하세요.")
+        print("  (웹브라우저에서 Jira에 이미 로그인 되어 있는 상태여야 함)")
         print(f"https://higen-rnd.atlassian.net/rest/api/2/user/search?query={user_email}")
         username_key = input("# acountID를 입력하세요 : ")
         with open("acopuntID.txt", "w") as f4:
             f4.write(username_key)
 
+# Header
+print("\n##################################################")
+print("#                                                #")
+print("#  JIRA_WORKLOG                                  #")
+print("#                                                #")
+print("#  2025-06-20 dhkima@higenrnm.com                #")
+print("#                                                #")
+print("##################################################\n")
+
 # 조회 날짜 설정 (조회하고 싶은 일자로 수정 가능)
-print("# 원하는 날짜를 입력하세요.")
+print("# 조회를 원하는 날짜를 입력하세요.")
 print("  예 : 2025-06-16")
 print(f"  그냥 엔터를 치면 오늘 기준입니다 : {datetime.now().strftime("%Y-%m-%d")}")
-date_input = input()
+date_input = input("  : ")
 if date_input == "":
     date_input = datetime.now()
     d = date_input
@@ -40,10 +50,18 @@ else:
         d = datetime.strptime(date_input, "%Y-%m-%d")
     except ValueError:
         print("  날짜 형식이 올바르지 않습니다. (예: 2025-06-16)")
-print("  입력한 날짜:", d.date())
+        exit()
+print(f"  >> 입력한 날짜: {d.date()}\n")
 today = datetime(d.year, d.month, d.day, 23, 59, 59)
 
-start_date_str = (today - timedelta(days=0)).strftime("%Y-%m-%d")
+print("# 조회 날짜부터 며칠까지 기간동안 앞서 더 조회할까요?")
+print("  그냥 엔터를 누르면 0으로 합니다.")
+days_input = input("  : ")
+if days_input == "":
+    days_input = 0
+print(f"  >> 입력한 조회 기간: {days_input}\n")
+
+start_date_str = (today - timedelta(days=int(days_input))).strftime("%Y-%m-%d")
 end_date_str = today.strftime("%Y-%m-%d")
 
 # 문자열 날짜를 datetime 객체로 변환
@@ -102,12 +120,15 @@ except NameError:
     total_hours = 0
     remaining_minutes = 0
     seconds = 0
-print(f"  기존 총 업무시간 : {total_hours}:{remaining_minutes}:{seconds}")
+print(f"  >> 기존 총 업무시간 : {total_hours}:{remaining_minutes}:{seconds} = {total_time_spent_seconds}[sec]\n")
 
 # 원하는 총 업무시간 설정 (0을 입력하면 원래값 그대로 유지)
-print("# 0을 입력하면 원래값 그대로 유지됩니다.")
-workingtime_input = input(f"  원하는 총 업무시간을 입력하세요 (예:{total_hours}) : ")
-workingtime_seconds = int(workingtime_input)*3600
+print(f"# 원하는 총 업무시간(hour)을 입력하세요 (예:{total_time_spent_seconds/3600})")
+print("  그냥 엔터를 누르거나 0을 입력하면 원래 총 업무시간 그대로 유지됩니다.")
+workingtime_input = input("  : ")
+if workingtime_input == "" or workingtime_input == 0:
+    workingtime_input = total_time_spent_seconds/3600
+workingtime_seconds = int(float(workingtime_input)*3600)
 
 # 새로 입력한 총 업무시간에서 기존의 총 업무시간을 나눈 비율
 new_total_hours = workingtime_seconds // 3600
@@ -118,7 +139,7 @@ except NameError:
     new_total_hours = 0
     new_remaining_minutes = 0
     new_seconds = 0
-print(f"  원하는 총 업무시간 : {new_total_hours}:{new_remaining_minutes}:{new_seconds}")
+print(f"  원하는 총 업무시간 : {new_total_hours}:{new_remaining_minutes}:{new_seconds}\n")
 if workingtime_seconds==0 or total_time_spent_seconds==0:
     workingtime_factor = 1
 else:
