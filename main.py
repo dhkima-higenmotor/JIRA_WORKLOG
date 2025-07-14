@@ -17,15 +17,15 @@ if response1.status_code == 200 and response1.json():
     username_key = response1.json()[0]["accountId"]
     displayName_to_check = response1.json()[0]["displayName"]
 else:
-    if os.path.exists("acopuntID.txt"):
-        with open("acopuntID.txt", "r") as f3:
+    if os.path.exists("acountID.txt"):
+        with open("acountID.txt", "r") as f3:
             username_key = f3.read().strip()
     else:
         print("# 아래 URL을 웹브라우저에 복사해 넣어서 acountID를 확인하세요.")
         print("  (웹브라우저에서 Jira에 이미 로그인 되어 있는 상태여야 함)")
         print(f"https://higen-rnd.atlassian.net/rest/api/2/user/search?query={user_email}")
         username_key = input("# acountID를 입력하세요 : ")
-        with open("acopuntID.txt", "w") as f4:
+        with open("acountID.txt", "w") as f4:
             f4.write(username_key)
 
 # Header
