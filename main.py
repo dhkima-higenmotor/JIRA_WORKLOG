@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import os
 
 # JIRA 접속 정보 설정
-base_url = "https://higen-rnd.atlassian.net/rest/api/2/"
+base_url = "https://higen-rnd.atlassian.net/rest/api/3/"
 with open('jira_api_token.txt', 'r', encoding='utf-8') as f1:
     jira_api_token = f1.read()
 with open('user_email.txt', 'r', encoding='utf-8') as f2:
@@ -23,7 +23,7 @@ else:
     else:
         print("# 아래 URL을 웹브라우저에 복사해 넣어서 acountID를 확인하세요.")
         print("  (웹브라우저에서 Jira에 이미 로그인 되어 있는 상태여야 함)")
-        print(f"https://higen-rnd.atlassian.net/rest/api/2/user/search?query={user_email}")
+        print(f"https://higen-rnd.atlassian.net/rest/api/3/user/search?query={user_email}")
         username_key = input("# acountID를 입력하세요 : ")
         with open("acountID.txt", "w") as f4:
             f4.write(username_key)
