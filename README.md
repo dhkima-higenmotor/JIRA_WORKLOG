@@ -36,6 +36,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 ## 실행아이콘 만들기
 * `JIRA_WORKLOG.bat` 파일의 바로가기 만들기
 * 바로가기 아이콘을 원하는 위치에 배치해 두고 사용
+* 바로가기 아이콘 설정에서, 'robot_1211_V01.ico' 파일을 지정해서 예쁜 아이콘으로 변경 가능함
 
 ## 실행하기
 * 만일 자동으로 username_key를 프로그램이 추출해 내는데 실패할 경우에는, 수동으로 입력해야 함
@@ -46,20 +47,3 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 * 원하는 총 업무시간 입력 (원래 시간 그대로 거의 그대로 유지하고 싶으면 그냥 엔터 - 근사치로 계산하기 때문에 몇 분씩 차이가 날 수 있음)
 * 맨 마지막 업무시간이 전체 합산 시간임
 
-
-# 기타 참고사항 (사용방법과 직접 관련 없음)
-
-## username_key 알아내기
-* Jira에 로그인된 브라우저에서,
-* 아래와 같이 맨 끝 내용에 자신의 이메일 주소를 넣은후, 브라우저 URL로 넣어서 나오는 정보를 확인한다.
-```
-https://higen-rnd.atlassian.net/rest/api/2/user/search?query=dhkima@higenrnm.com
-```
-* 내용 중에 `accountId`에 해당하는 내용을 복사해서, 잘 보관해 둔다.
-
-## 특정 Issue 내용 추출하기
-* Jira에 로그인된 브라우저에서,
-* 아래와 같이 맨 끝 내용에 이슈 번호를 넣은후, 브라우저 URL로 넣어서 나오는 정보를 확인한다.
-```
-https://higen-rnd.atlassian.net/rest/api/2/issue/A10ETC-28
-```
