@@ -14,7 +14,6 @@ BASE_URL = "https://higen-rnd.atlassian.net/rest/api/3/"
 # =========================
 # 기존 핵심 로직 함수들
 # =========================
-
 def read_text(path: str) -> str:
     """
     텍스트 파일 읽기. 없으면 예외 발생(콘솔 종료 대신 GUI에서 처리하기 위해 예외로 전달).
@@ -24,13 +23,11 @@ def read_text(path: str) -> str:
         raise FileNotFoundError(f"파일이 없습니다: {path}")
     return p.read_text(encoding="utf-8").strip()
 
-
 def get_session(user_email: str, api_token: str) -> requests.Session:
     s = requests.Session()
     s.auth = HTTPBasicAuth(user_email, api_token)
     s.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
     return s
-
 
 def get_current_account_id(sess: requests.Session) -> str:
     # GET /rest/api/3/myself
@@ -38,7 +35,6 @@ def get_current_account_id(sess: requests.Session) -> str:
     r.raise_for_status()
     data = r.json()
     return data["accountId"]
-
 
 def validate_date_str(date_str: str) -> str:
     """
@@ -50,7 +46,6 @@ def validate_date_str(date_str: str) -> str:
     except ValueError:
         raise ValueError("날짜 형식이 올바르지 않습니다. 예: 2025-09-17")
 
-
 def enhanced_search_issue_keys(sess: requests.Session, jql: str, fields=None, page_size=100) -> list:
     """
     Enhanced JQL Service API: POST /rest/api/3/search/jql
@@ -58,11 +53,9 @@ def enhanced_search_issue_keys(sess: requests.Session, jql: str, fields=None, pa
     """
     if fields is None:
         fields = ["key"]
-
     all_keys = []
     next_token = None
     url = BASE_URL + "search/jql"
-
     while True:
         payload = {
             "jql": jql,
@@ -71,20 +64,15 @@ def enhanced_search_issue_keys(sess: requests.Session, jql: str, fields=None, pa
         }
         if next_token:
             payload["nextPageToken"] = next_token
-
         r = sess.post(url, json=payload, timeout=60)
         r.raise_for_status()
         data = r.json()
-
         issues = data.get("issues", []) or []
         all_keys.extend([it.get("key") for it in issues if it.get("key")])
-
         next_token = data.get("nextPageToken")
         if not next_token:
             break
-
     return sorted(set(all_keys))
-
 
 def iter_issue_worklogs(sess: requests.Session, issue_key: str, page_size=100):
     """
@@ -93,28 +81,22 @@ def iter_issue_worklogs(sess: requests.Session, issue_key: str, page_size=100):
     """
     url = f"{BASE_URL}issue/{issue_key}/worklog"
     start_at = 0
-
     while True:
         r = sess.get(url, params={"startAt": start_at, "maxResults": page_size}, timeout=60)
         r.raise_for_status()
         data = r.json()
-
         worklogs = data.get("worklogs", []) or []
         total = data.get("total", len(worklogs))
-
         for wl in worklogs:
             yield wl
-
         start_at += len(worklogs)
         if start_at >= total:
             break
-
 
 def parse_started_date(started_str: str) -> str:
     # 예: "2021-01-17T12:34:00.000+0000"
     dt = datetime.strptime(started_str, "%Y-%m-%dT%H:%M:%S.%f%z")
     return dt.date().isoformat()
-
 
 def extract_comment_text(adf) -> str:
     """
@@ -160,7 +142,6 @@ def extract_comment_text(adf) -> str:
     except Exception:
         return ""
 
-
 def format_started_kor(started_str: str) -> str:
     """
     Jira started ISO 문자열을 "YYYY-MM-DD(요일) HH:MM" 형식으로 변환.
@@ -177,13 +158,12 @@ def format_started_kor(started_str: str) -> str:
 # =========================
 # GUI 애플리케이션
 # =========================
-
 class JiraWorklogGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Jira Worklog 조회 (currentUser, worklogDate)")
         self.geometry("1000x620")
-        self.minsize(900, 520)
+        self.minsize(900, 400)
 
         # 상태
         self._worker = None
@@ -194,6 +174,9 @@ class JiraWorklogGUI(tk.Tk):
         self._build_top()
         self._build_table()
         self._build_bottom()
+
+        # 단축키 바인딩
+        self._bind_shortcuts()
 
         # 기본 날짜 = 오늘
         self.entry_date.insert(0, date.today().isoformat())
@@ -220,22 +203,22 @@ class JiraWorklogGUI(tk.Tk):
         frm.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         cols = ("issueKey", "worklogId", "started", "timeSpent", "authorDisplayName", "commentText")
-        self.tree = ttk.Treeview(frm, columns=cols, show="headings", height=18)
+        self.tree = ttk.Treeview(frm, columns=cols, show="headings", height=18, selectmode="extended")
 
         # 헤더
         self.tree.heading("issueKey", text="Issue Key")
         self.tree.heading("worklogId", text="Worklog ID")
         self.tree.heading("started", text="Started")
-        self.tree.heading("timeSpent", text="Time Spent")
+        self.tree.heading("timeSpent", text="TimeSpent")
         self.tree.heading("authorDisplayName", text="Author")
         self.tree.heading("commentText", text="Comment")
 
         # 컬럼 폭
-        self.tree.column("issueKey", width=110, anchor=tk.CENTER)
-        self.tree.column("worklogId", width=110, anchor=tk.CENTER)
-        self.tree.column("started", width=180, anchor=tk.W)
-        self.tree.column("timeSpent", width=100, anchor=tk.CENTER)
-        self.tree.column("authorDisplayName", width=160, anchor=tk.W)
+        self.tree.column("issueKey", width=80, anchor=tk.CENTER)
+        self.tree.column("worklogId", width=70, anchor=tk.CENTER)
+        self.tree.column("started", width=120, anchor=tk.CENTER)
+        self.tree.column("timeSpent", width=70, anchor=tk.CENTER)
+        self.tree.column("authorDisplayName", width=50, anchor=tk.CENTER)
         self.tree.column("commentText", width=360, anchor=tk.W)
 
         vsb = ttk.Scrollbar(frm, orient="vertical", command=self.tree.yview)
@@ -256,13 +239,96 @@ class JiraWorklogGUI(tk.Tk):
         self.lbl_status = ttk.Label(frm, text="합계(시간): 0.00 h")
         self.lbl_status.pack(side=tk.LEFT)
 
-        self.lbl_hint = ttk.Label(frm, text="jira_api_token.txt / user_email.txt 파일이 같은 폴더에 있어야 합니다.")
+        self.lbl_hint = ttk.Label(frm, text="ctrl+c 및 ctrl+a 단축키 사용 가능합니다.  jira_api_token.txt / user_email.txt 파일이 같은 폴더에 있어야 합니다.")
         self.lbl_hint.pack(side=tk.RIGHT)
+
+    # =========================
+    # 단축키/클립보드 유틸
+    # =========================
+    def _bind_shortcuts(self):
+        """
+        Ctrl+C: 선택된 행 복사 (헤더 포함, 탭-구분)
+        Ctrl+A: 전체 테이블 복사 (헤더 포함, 탭-구분)
+        """
+        # Treeview 포커스에서 동작
+        for seq in ("<Control-c>", "<Control-C>"):
+            self.tree.bind(seq, self.on_copy_selection)
+        for seq in ("<Control-a>", "<Control-A>"):
+            self.tree.bind(seq, self.on_copy_all)
+
+        # 최상위에도 바인딩(포커스가 테이블이 아닐 때를 보완) - 필요 시 주석 처리 가능
+        self.bind_all("<<Copy>>", self.on_copy_selection)
+        self.bind_all("<Control-a>", self.on_copy_all)
+        self.bind_all("<Control-A>", self.on_copy_all)
+
+    def _get_table_headers(self):
+        cols = self.tree["columns"]
+        headers = [self.tree.heading(c)["text"] for c in cols]
+        return cols, headers
+
+    def _copy_rows_to_clipboard(self, item_ids):
+        """
+        주어진 item_ids 목록을 헤더와 함께 탭-구분 텍스트로 클립보드에 복사.
+        """
+        if not item_ids:
+            return
+        cols, headers = self._get_table_headers()
+
+        lines = []
+        # 헤더
+        lines.append("\t".join(headers))
+
+        # 데이터 행
+        for iid in item_ids:
+            vals = self.tree.item(iid, "values")
+            # 보장된 순서로 맞추기
+            row = [str(vals[idx]) if idx < len(vals) else "" for idx, _c in enumerate(cols)]
+            # 개행 포함 시 안전 처리
+            row = [s.replace("\r", " ").replace("\n", " ") for s in row]
+            lines.append("\t".join(row))
+
+        text = "\n".join(lines)
+
+        # 클립보드
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            # 일부 OS에서 필요
+            self.update()
+        except Exception as e:
+            messagebox.showerror("클립보드 오류", f"클립보드 복사 중 오류가 발생했습니다:\n{e}")
+
+    def on_copy_selection(self, event=None):
+        """
+        선택된 행들만 복사. 선택이 없으면 무시.
+        """
+        sel = self.tree.selection()
+        if not sel:
+            return "break"
+        # 선택된 항목을 트리 표시 순서대로 정렬(선택 순서가 아닌 표시 순서 기준)
+        order = {iid: idx for idx, iid in enumerate(self.tree.get_children(""))}
+        sel_sorted = sorted(sel, key=lambda x: order.get(x, 0))
+        self._copy_rows_to_clipboard(sel_sorted)
+        return "break"
+
+    def on_copy_all(self, event=None):
+        """
+        전체 테이블을 복사. 필요 시 전체 선택까지 수행.
+        """
+        all_items = self.tree.get_children("")
+        if not all_items:
+            return "break"
+        self._copy_rows_to_clipboard(all_items)
+        # 선택 상태도 전체로 반영(선택 시각화가 필요한 경우)
+        try:
+            self.tree.selection_set(all_items)
+        except Exception:
+            pass
+        return "break"
 
     # =========================
     # 이벤트 핸들러
     # =========================
-
     def on_query(self):
         if self._worker and self._worker.is_alive():
             messagebox.showinfo("안내", "이미 조회 중입니다. 잠시만 기다려주세요.")
@@ -307,7 +373,6 @@ class JiraWorklogGUI(tk.Tk):
     # =========================
     # 워커 로직
     # =========================
-
     def _run_query_worker(self, date_str: str):
         """
         원래 main()에서 수행하던 흐름을 GUI용으로 재구성.
@@ -391,7 +456,6 @@ class JiraWorklogGUI(tk.Tk):
     # =========================
     # UI 유틸
     # =========================
-
     def _update_result(self, df_display: pd.DataFrame, total_hours: float):
         self._df_display = df_display
         self._fill_table_from_df(df_display)
@@ -436,7 +500,6 @@ class JiraWorklogGUI(tk.Tk):
             self.tree.insert("", tk.END, values=values)
 
         self.btn_save_csv.config(state=tk.NORMAL)
-
 
 # 진입점
 if __name__ == "__main__":
