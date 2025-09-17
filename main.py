@@ -161,9 +161,10 @@ def format_started_kor(started_str: str) -> str:
 class JiraWorklogGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Jira Worklog 조회 (currentUser, worklogDate)")
-        self.geometry("1000x620")
-        self.minsize(900, 400)
+        self.title("JIRA_WORKLOG 조회 프로그램")
+        # self.geometry("1000x620")
+        self.geometry("1000x400")
+        self.minsize(1000, 200)
 
         # 상태
         self._worker = None
@@ -203,7 +204,7 @@ class JiraWorklogGUI(tk.Tk):
         frm.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         cols = ("issueKey", "worklogId", "started", "timeSpent", "authorDisplayName", "commentText")
-        self.tree = ttk.Treeview(frm, columns=cols, show="headings", height=18, selectmode="extended")
+        self.tree = ttk.Treeview(frm, columns=cols, show="headings", height=10, selectmode="extended")
 
         # 헤더
         self.tree.heading("issueKey", text="Issue Key")
@@ -239,7 +240,7 @@ class JiraWorklogGUI(tk.Tk):
         self.lbl_status = ttk.Label(frm, text="합계(시간): 0.00 h")
         self.lbl_status.pack(side=tk.LEFT)
 
-        self.lbl_hint = ttk.Label(frm, text="ctrl+c 및 ctrl+a 단축키 사용 가능합니다.  jira_api_token.txt / user_email.txt 파일이 같은 폴더에 있어야 합니다.")
+        self.lbl_hint = ttk.Label(frm, text="* ctrl+c 및 ctrl+a 단축키로 클립보드에 내용 복사 가능합니다.\n* jira_api_token.txt 및 user_email.txt 파일이 같은 폴더에 있어야 합니다.")
         self.lbl_hint.pack(side=tk.RIGHT)
 
     # =========================
