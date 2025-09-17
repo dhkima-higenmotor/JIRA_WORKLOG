@@ -1,2 +1,2 @@
 uv run main.py
-pause
+REM pause

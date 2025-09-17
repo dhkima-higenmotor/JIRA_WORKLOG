@@ -1,231 +1,444 @@
+import threading
 import requests
 from requests.auth import HTTPBasicAuth
-from datetime import datetime, timedelta
-import os
+import pandas as pd
+from datetime import datetime, date
+from pathlib import Path
+import sys
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
 
-# JIRA 접속 정보 설정
-base_url = "https://higen-rnd.atlassian.net/rest/api/3/"
-with open('jira_api_token.txt', 'r', encoding='utf-8') as f1:
-    jira_api_token = f1.read()
-with open('user_email.txt', 'r', encoding='utf-8') as f2:
-    user_email = f2.read()
+# 고정 BASE_URL (지시사항)
+BASE_URL = "https://higen-rnd.atlassian.net/rest/api/3/"
 
-# 사용자 키 (Atlassian 사용자 ID) 및 사용자 이름 획득
-HEADERS = {"Content-Type": "application/json"}
-response1 = requests.get(f"{base_url}/user/search", auth=(user_email,jira_api_token), headers=HEADERS, params={"query": user_email})
-if response1.status_code == 200 and response1.json():
-    username_key = response1.json()[0]["accountId"]
-    displayName_to_check = response1.json()[0]["displayName"]
-else:
-    if os.path.exists("acountID.txt"):
-        with open("acountID.txt", "r") as f3:
-            username_key = f3.read().strip()
-    else:
-        print("# 아래 URL을 웹브라우저에 복사해 넣어서 acountID를 확인하세요.")
-        print("  (웹브라우저에서 Jira에 이미 로그인 되어 있는 상태여야 함)")
-        print(f"https://higen-rnd.atlassian.net/rest/api/3/user/search?query={user_email}")
-        username_key = input("# acountID를 입력하세요 : ")
-        with open("acountID.txt", "w") as f4:
-            f4.write(username_key)
+# =========================
+# 기존 핵심 로직 함수들
+# =========================
 
-# Header
-print("\n##################################################")
-print("#                                                #")
-print("#  JIRA_WORKLOG                                  #")
-print("#                                                #")
-print("#  2025-06-20 dhkima@higenrnm.com                #")
-print("#                                                #")
-print("##################################################\n")
+def read_text(path: str) -> str:
+    """
+    텍스트 파일 읽기. 없으면 예외 발생(콘솔 종료 대신 GUI에서 처리하기 위해 예외로 전달).
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"파일이 없습니다: {path}")
+    return p.read_text(encoding="utf-8").strip()
 
-# 조회 날짜 설정 (조회하고 싶은 일자로 수정 가능)
-print("# 조회를 원하는 날짜를 입력하세요.")
-print("  예 : 2025-06-16")
-print(f"  그냥 엔터를 치면 오늘 기준입니다 : {datetime.now().strftime("%Y-%m-%d")}")
-date_input = input("  : ")
-if date_input == "":
-    date_input = datetime.now()
-    d = date_input
-else:
+
+def get_session(user_email: str, api_token: str) -> requests.Session:
+    s = requests.Session()
+    s.auth = HTTPBasicAuth(user_email, api_token)
+    s.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
+    return s
+
+
+def get_current_account_id(sess: requests.Session) -> str:
+    # GET /rest/api/3/myself
+    r = sess.get(BASE_URL + "myself", timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    return data["accountId"]
+
+
+def validate_date_str(date_str: str) -> str:
+    """
+    YYYY-MM-DD 형식 검증. 잘못되면 ValueError 발생.
+    """
     try:
-        d = datetime.strptime(date_input, "%Y-%m-%d")
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return date_str
     except ValueError:
-        print("  날짜 형식이 올바르지 않습니다. (예: 2025-06-16)")
-        exit()
-print(f"  >> 입력한 날짜: {d.date()}\n")
-today = datetime(d.year, d.month, d.day, 23, 59, 59)
+        raise ValueError("날짜 형식이 올바르지 않습니다. 예: 2025-09-17")
 
-print("# 조회 날짜부터 며칠까지 기간동안 앞서 더 조회할까요?")
-print("  그냥 엔터를 누르면 0으로 합니다.")
-days_input = input("  : ")
-if days_input == "":
-    days_input = 0
-print(f"  >> 입력한 조회 기간: {days_input}\n")
 
-start_date_str = (today - timedelta(days=int(days_input))).strftime("%Y-%m-%d")
-end_date_str = today.strftime("%Y-%m-%d")
+def enhanced_search_issue_keys(sess: requests.Session, jql: str, fields=None, page_size=100) -> list:
+    """
+    Enhanced JQL Service API: POST /rest/api/3/search/jql
+    응답의 nextPageToken 기반 스크롤링 페이지네이션 처리
+    """
+    if fields is None:
+        fields = ["key"]
 
-# 문자열 날짜를 datetime 객체로 변환
-# 주의: Jira에서 반환되는 started_time은 '2024-06-13T14:00:00.000+0900' 형태입니다.
+    all_keys = []
+    next_token = None
+    url = BASE_URL + "search/jql"
 
-# 시작 날짜의 자정 (00:00:00)
-start_filter_date = datetime.strptime(start_date_str, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
-# 종료 날짜의 다음 날 자정 (즉, end_date_str의 모든 시간을 포함하도록)
-end_filter_date = datetime.strptime(end_date_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999)
+    while True:
+        payload = {
+            "jql": jql,
+            "fields": fields,
+            "maxResults": page_size
+        }
+        if next_token:
+            payload["nextPageToken"] = next_token
 
-# 누적 시간
-total_time_spent_seconds = 0 # 합산할 시간을 저장할 변수 초기화
+        r = sess.post(url, json=payload, timeout=60)
+        r.raise_for_status()
+        data = r.json()
 
-# JQL 쿼리 작성 (단순 날짜 형식 사용)
-jql_query = f"worklogAuthor = '{username_key}' AND timeSpent > 0 AND worklogDate >= '{start_date_str}' AND worklogDate <= '{end_date_str}'"
+        issues = data.get("issues", []) or []
+        all_keys.extend([it.get("key") for it in issues if it.get("key")])
 
-# API 요청 헤더 설정
-headers = {"Accept": "application/json",}
+        next_token = data.get("nextPageToken")
+        if not next_token:
+            break
 
-# API 요청 본문 설정
-body = {
-    "jql": jql_query,
-    "startAt": 0,       # 첫 번째 항목부터 시작
-    "maxResults": 100,  # 한 번에 최대 100개의 결과 가져오기    
-    "fields": ["project", "worklog"],  # 필요한 필드 명시적으로 지정
-}
+    return sorted(set(all_keys))
 
-# API 요청 보내기
-response = requests.post(base_url + "search", json=body, headers=headers, auth=HTTPBasicAuth(user_email, jira_api_token))
 
-# 총 업무시간 확인 : total_time_spent_seconds
-if response.status_code == 200:
-    # JSON 데이터 파싱 시작
-    data = response.json()
-    # 각 이슈에 대해 Worklog 정보 추출
-    for issue in data['issues']:
-        response2 = requests.get(base_url + "issue/" + issue['key'], auth=HTTPBasicAuth(user_email, jira_api_token))
-        # Worklog 정보 출력
-        if 'worklog' in issue['fields'] and 'worklogs' in issue['fields']['worklog']:
-            for worklog in issue['fields']['worklog']['worklogs']:
-                if worklog['author']['displayName'] == displayName_to_check: # 'displayName_to_check' 변수를 사용
-                    worklog_started_datetime = datetime.fromisoformat(worklog['started'])
-                    worklog_started_naive_datetime = worklog_started_datetime.replace(tzinfo=None)
-                    if start_filter_date <= worklog_started_naive_datetime <= end_filter_date:
-                        time_spent_seconds = worklog.get('timeSpentSeconds', 0) # timeSpentSeconds가 없을 경우 0으로 처리
-                        # 시간(timeSpentSeconds)을 합산
-                        total_time_spent_seconds += time_spent_seconds # 합산
+def iter_issue_worklogs(sess: requests.Session, issue_key: str, page_size=100):
+    """
+    표준 Worklog API: GET /rest/api/3/issue/{issueIdOrKey}/worklog
+    startAt/total 기반 페이지네이션 처리
+    """
+    url = f"{BASE_URL}issue/{issue_key}/worklog"
+    start_at = 0
 
-# 기존 총 업무시간 출력
-# 총 시간을 시간, 분, 초로 변환
-total_hours = total_time_spent_seconds // 3600
-remaining_minutes = (total_time_spent_seconds % 3600) // 60
-seconds = total_time_spent_seconds % 60
-try: total_hours
-except NameError:
-    total_hours = 0
-    remaining_minutes = 0
-    seconds = 0
-print(f"  >> 기존 총 업무시간 : {total_hours}:{remaining_minutes}:{seconds} = {total_time_spent_seconds}[sec]\n")
+    while True:
+        r = sess.get(url, params={"startAt": start_at, "maxResults": page_size}, timeout=60)
+        r.raise_for_status()
+        data = r.json()
 
-# 원하는 총 업무시간 설정 (0을 입력하면 원래값 그대로 유지)
-print(f"# 원하는 총 업무시간(hour)을 입력하세요 (예:{total_time_spent_seconds/3600})")
-print("  그냥 엔터를 누르거나 0을 입력하면 원래 총 업무시간 그대로 유지됩니다.")
-workingtime_input = input("  : ")
-if workingtime_input == "" or workingtime_input == 0:
-    workingtime_input = total_time_spent_seconds/3600
-workingtime_seconds = int(float(workingtime_input)*3600)
+        worklogs = data.get("worklogs", []) or []
+        total = data.get("total", len(worklogs))
 
-# 새로 입력한 총 업무시간에서 기존의 총 업무시간을 나눈 비율
-new_total_hours = workingtime_seconds // 3600
-new_remaining_minutes = (workingtime_seconds % 3600) // 60
-new_seconds = workingtime_seconds % 60
-try: new_total_hours
-except NameError:
-    new_total_hours = 0
-    new_remaining_minutes = 0
-    new_seconds = 0
-print(f"  원하는 총 업무시간 : {new_total_hours}:{new_remaining_minutes}:{new_seconds}\n")
-if workingtime_seconds==0 or total_time_spent_seconds==0:
-    workingtime_factor = 1
-else:
-    workingtime_factor = workingtime_seconds / total_time_spent_seconds
+        for wl in worklogs:
+            yield wl
 
-# 총 업무시간 조정
-if response.status_code == 200:
-    # JSON 데이터 파싱 시작
-    data = response.json()
-    # 각 이슈에 대해 Worklog 정보 추출
-    for issue in data['issues']:
-        response4 = requests.get(base_url + "issue/" + issue['key'], auth=HTTPBasicAuth(user_email, jira_api_token))
-        # Worklog 정보 출력
-        if 'worklog' in issue['fields'] and 'worklogs' in issue['fields']['worklog']:
-            for worklog in issue['fields']['worklog']['worklogs']:
-                if worklog['author']['displayName'] == displayName_to_check: # 'displayName_to_check' 변수를 사용
-                    worklog_started_datetime = datetime.fromisoformat(worklog['started'])
-                    worklog_started_naive_datetime = worklog_started_datetime.replace(tzinfo=None)
-                    if start_filter_date <= worklog_started_naive_datetime <= end_filter_date:
-                        if workingtime_seconds != 0:
-                             time_spent_seconds = worklog.get('timeSpentSeconds', 0) # timeSpentSeconds가 없을 경우 0으로 처리
-                             new_workingtime_seconds = int(int(time_spent_seconds) * workingtime_factor)
-                             response4 = requests.put(base_url+"issue/"+issue['key']+"/worklog/"+worklog['id'], headers={"Accept": "application/json","Content-Type": "application/json"}, auth=HTTPBasicAuth(user_email,jira_api_token), json={"timeSpentSeconds": new_workingtime_seconds})
-                             #print(json.dumps(response4.json(), indent=4, ensure_ascii=False))
+        start_at += len(worklogs)
+        if start_at >= total:
+            break
 
-# API 요청 보내기
-response = requests.post(base_url + "search", json=body, headers=headers, auth=HTTPBasicAuth(user_email, jira_api_token))
 
-# 응답 확인 및 출력
-total_time_spent_seconds = 0
-if response.status_code == 200:
-    print("\n\nRequest successfully received!")
-    print(f"Response status code: {response.status_code}")
-    # JSON 데이터 파싱 시작
-    data = response.json()
-    print("\nAPI Response:\n")
-    # 각 이슈에 대해 Worklog 정보 추출
-    for issue in data['issues']:
-        print(f"# Project Name: {issue['fields']['project']['name']}")
-        print(f"# Issue Key: {issue['key']}")
-        response2 = requests.get(base_url + "issue/" + issue['key'], auth=HTTPBasicAuth(user_email, jira_api_token))
-        print(f"# Issue Summary: {response2.json()['fields']['summary']}")
-        # Worklog 정보 출력
-        if 'worklog' in issue['fields'] and 'worklogs' in issue['fields']['worklog']:
-            print("# Worklogs exist:")
-            for worklog in issue['fields']['worklog']['worklogs']:
-                # displayName 변수가 미리 정의되어 있다고 가정합니다.
-                # 예: displayName_to_check = "주형렬C"
-                if worklog['author']['displayName'] == displayName_to_check: # 'displayName_to_check' 변수를 사용
-                    #started_time가 start_date ~ end_date 사이에 있는 것만 필터링
-                    # Jira의 started_time은 ISO 8601 형식입니다. fromisoformat()이 가장 적합합니다.
-                    # 시간대 정보가 포함되어 있으므로 aware datetime 객체로 파싱됩니다.
-                    worklog_started_datetime = datetime.fromisoformat(worklog['started'])
-                    # 가장 간단한 방법은 worklog_started_datetime에서 시간대 정보를 제거하고 날짜만 비교하는 것입니다.
-                    # 또는, 필터 날짜와 시간까지 모두 비교하려면,
-                    # worklog_started_datetime을 naive datetime으로 만들거나
-                    # 필터 날짜를 worklog_started_datetime과 동일한 시간대로 맞춰줘야 합니다.
-                    # 여기서는 worklog_started_datetime을 naive datetime으로 만들어서 비교하는 방법을 사용합니다.
-                    # (대부분의 경우 이렇게 해도 무방하나, 정확한 시간대 처리가 필요하면 복잡해짐)
-                    worklog_started_naive_datetime = worklog_started_datetime.replace(tzinfo=None)
-                    if start_filter_date <= worklog_started_naive_datetime <= end_filter_date:
-                        print(f"  Worklog by {worklog['author']['displayName']}")
-                        print(f"  Started: {worklog['started']}")
-                        time_spent_seconds = worklog.get('timeSpentSeconds', 0) # timeSpentSeconds가 없을 경우 0으로 처리
-                        print(f"  Time Spent: {time_spent_seconds:-} seconds")
-                        if 'comment' in worklog:
-                            print(f"## Comment: \n{worklog['comment']}")
-                        else:
-                            print(f"## Comment: ")
-                        # 시간(timeSpentSeconds)을 합산
-                        total_time_spent_seconds += time_spent_seconds # 합산
-            print("------------------------------------------------")
-            print(f"# Total time spent by {displayName_to_check}: {total_time_spent_seconds} seconds")
-            print("\n")
+def parse_started_date(started_str: str) -> str:
+    # 예: "2021-01-17T12:34:00.000+0000"
+    dt = datetime.strptime(started_str, "%Y-%m-%dT%H:%M:%S.%f%z")
+    return dt.date().isoformat()
+
+
+def extract_comment_text(adf) -> str:
+    """
+    Jira Cloud v3 Worklog의 comment는 ADF(Document)이다.
+    - 문자열이면 그대로 반환
+    - dict/list면 재귀적으로 모든 text 노드 수집
+    - mention/emoji 등 특수 노드도 간단 표시
+    파싱 실패 시 빈 문자열
+    """
+    try:
+        # 문자열 코멘트 대비
+        if isinstance(adf, str):
+            return adf.strip()
+
+        texts = []
+
+        def walk(node):
+            if isinstance(node, dict):
+                ntype = node.get("type")
+                if ntype == "text" and "text" in node:
+                    texts.append(node["text"])
+                elif ntype == "emoji":
+                    short = (node.get("attrs") or {}).get("shortName")
+                    if short:
+                        texts.append(short)
+                elif ntype == "mention":
+                    m = node.get("attrs") or {}
+                    label = m.get("text") or m.get("displayName") or m.get("id")
+                    if label:
+                        texts.append(str(label))
+                # 자식 순회
+                for key in ("content", "children"):
+                    if key in node and isinstance(node[key], list):
+                        for child in node[key]:
+                            walk(child)
+            elif isinstance(node, list):
+                for child in node:
+                    walk(child)
+
+        # 루트가 doc가 아니어도 content만 있으면 순회
+        walk(adf)
+        return " ".join(texts).strip()
+    except Exception:
+        return ""
+
+
+def format_started_kor(started_str: str) -> str:
+    """
+    Jira started ISO 문자열을 "YYYY-MM-DD(요일) HH:MM" 형식으로 변환.
+    요일: 월(0)~일(6) 수동 매핑. 파싱 실패 시 원문 반환.
+    """
+    try:
+        dt = datetime.strptime(started_str, "%Y-%m-%dT%H:%M:%S.%f%z")
+        weekdays = ["월", "화", "수", "목", "금", "토", "일"]
+        w = weekdays[dt.weekday()]
+        return f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}({w}) {dt.hour:02d}:{dt.minute:02d}"
+    except Exception:
+        return started_str
+
+# =========================
+# GUI 애플리케이션
+# =========================
+
+class JiraWorklogGUI(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Jira Worklog 조회 (currentUser, worklogDate)")
+        self.geometry("1000x620")
+        self.minsize(900, 520)
+
+        # 상태
+        self._worker = None
+        self._df = pd.DataFrame()
+        self._df_display = pd.DataFrame()
+
+        # UI 구성
+        self._build_top()
+        self._build_table()
+        self._build_bottom()
+
+        # 기본 날짜 = 오늘
+        self.entry_date.insert(0, date.today().isoformat())
+
+    def _build_top(self):
+        frm = ttk.Frame(self, padding=(10, 10, 10, 5))
+        frm.pack(side=tk.TOP, fill=tk.X)
+
+        ttk.Label(frm, text="조회 날짜 (YYYY-MM-DD):").pack(side=tk.LEFT)
+        self.entry_date = ttk.Entry(frm, width=16)
+        self.entry_date.pack(side=tk.LEFT, padx=(6, 10))
+
+        self.btn_query = ttk.Button(frm, text="조회", command=self.on_query)
+        self.btn_query.pack(side=tk.LEFT)
+
+        self.btn_save_csv = ttk.Button(frm, text="CSV 저장", command=self.on_save_csv, state=tk.DISABLED)
+        self.btn_save_csv.pack(side=tk.LEFT, padx=(10, 0))
+
+        self.progress = ttk.Progressbar(frm, mode="indeterminate", length=180)
+        self.progress.pack(side=tk.RIGHT)
+
+    def _build_table(self):
+        frm = ttk.Frame(self, padding=(10, 5, 10, 5))
+        frm.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        cols = ("issueKey", "worklogId", "started", "timeSpent", "authorDisplayName", "commentText")
+        self.tree = ttk.Treeview(frm, columns=cols, show="headings", height=18)
+
+        # 헤더
+        self.tree.heading("issueKey", text="Issue Key")
+        self.tree.heading("worklogId", text="Worklog ID")
+        self.tree.heading("started", text="Started")
+        self.tree.heading("timeSpent", text="Time Spent")
+        self.tree.heading("authorDisplayName", text="Author")
+        self.tree.heading("commentText", text="Comment")
+
+        # 컬럼 폭
+        self.tree.column("issueKey", width=110, anchor=tk.CENTER)
+        self.tree.column("worklogId", width=110, anchor=tk.CENTER)
+        self.tree.column("started", width=180, anchor=tk.W)
+        self.tree.column("timeSpent", width=100, anchor=tk.CENTER)
+        self.tree.column("authorDisplayName", width=160, anchor=tk.W)
+        self.tree.column("commentText", width=360, anchor=tk.W)
+
+        vsb = ttk.Scrollbar(frm, orient="vertical", command=self.tree.yview)
+        hsb = ttk.Scrollbar(frm, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscroll=vsb.set, xscroll=hsb.set)
+
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+
+        frm.rowconfigure(0, weight=1)
+        frm.columnconfigure(0, weight=1)
+
+    def _build_bottom(self):
+        frm = ttk.Frame(self, padding=(10, 5, 10, 10))
+        frm.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.lbl_status = ttk.Label(frm, text="합계(시간): 0.00 h")
+        self.lbl_status.pack(side=tk.LEFT)
+
+        self.lbl_hint = ttk.Label(frm, text="jira_api_token.txt / user_email.txt 파일이 같은 폴더에 있어야 합니다.")
+        self.lbl_hint.pack(side=tk.RIGHT)
+
+    # =========================
+    # 이벤트 핸들러
+    # =========================
+
+    def on_query(self):
+        if self._worker and self._worker.is_alive():
+            messagebox.showinfo("안내", "이미 조회 중입니다. 잠시만 기다려주세요.")
+            return
+
+        date_str = self.entry_date.get().strip()
+        try:
+            validate_date_str(date_str)
+        except Exception as e:
+            messagebox.showerror("날짜 오류", str(e))
+            return
+
+        # UI 잠금
+        self._lock_ui(True)
+        self._clear_table()
+        self.lbl_status.config(text="합계(시간): 0.00 h")
+
+        # 비동기 실행
+        self._worker = threading.Thread(target=self._run_query_worker, args=(date_str,), daemon=True)
+        self._worker.start()
+        self.progress.start(10)
+
+    def on_save_csv(self):
+        if self._df_display is None or self._df_display.empty:
+            messagebox.showinfo("안내", "저장할 데이터가 없습니다.")
+            return
+
+        path = filedialog.asksaveasfilename(
+            title="CSV로 저장",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+
+        try:
+            self._df_display.to_csv(path, index=False, encoding="utf-8-sig")
+            messagebox.showinfo("완료", "CSV 저장이 완료되었습니다.")
+        except Exception as e:
+            messagebox.showerror("오류", f"CSV 저장 중 오류가 발생했습니다:\n{e}")
+
+    # =========================
+    # 워커 로직
+    # =========================
+
+    def _run_query_worker(self, date_str: str):
+        """
+        원래 main()에서 수행하던 흐름을 GUI용으로 재구성.
+        """
+        try:
+            # 1) 파일에서 자격 정보 읽기
+            api_token = read_text("jira_api_token.txt")
+            user_email = read_text("user_email.txt")
+
+            # 2) 세션 생성
+            sess = get_session(user_email, api_token)
+
+            # 3) 로그인 사용자 accountId 획득 및 파일 저장 (지시된 철자 유지: acountID.txt)
+            account_id = get_current_account_id(sess)
+            Path("acountID.txt").write_text(account_id, encoding="utf-8")
+
+            # 5) Enhanced JQL로 대상 이슈 검색
+            jql = f"worklogAuthor = currentUser() AND worklogDate = '{date_str}'"
+            issue_keys = enhanced_search_issue_keys(sess, jql=jql, fields=["key"], page_size=100)
+
+            # 결과 없을 때
+            if not issue_keys:
+                df_display = pd.DataFrame(columns=[
+                    "issueKey", "worklogId", "started", "timeSpent", "authorDisplayName", "commentText"
+                ])
+                total_hours = 0.0
+                self.after(0, self._update_result, df_display, total_hours)
+                return
+
+            # 6) 각 이슈별 worklog 수집(로그인 사용자 + 해당 날짜만 필터)
+            rows = []
+            for key in issue_keys:
+                for wl in iter_issue_worklogs(sess, key, page_size=100):
+                    wl_author = wl.get("author", {}) or {}
+                    wl_account = wl_author.get("accountId", "")
+                    if wl_account != account_id:
+                        continue
+
+                    started_raw = wl.get("started", "")
+                    if not started_raw:
+                        continue
+
+                    # 날짜 필터
+                    if parse_started_date(started_raw) != date_str:
+                        continue
+
+                    row = {
+                        "issueKey": key,
+                        "worklogId": wl.get("id"),
+                        # started 표시 형식 변경: "YYYY-MM-DD(요일) HH:MM"
+                        "started": format_started_kor(started_raw),
+                        "timeSpent": wl.get("timeSpent"),
+                        "timeSpentSeconds": wl.get("timeSpentSeconds", 0) or 0,
+                        "authorDisplayName": wl_author.get("displayName", ""),
+                        "authorAccountId": wl_account,
+                        "updated": wl.get("updated", ""),
+                        # ADF 코멘트 안전 파싱
+                        "commentText": extract_comment_text(wl.get("comment")),
+                    }
+                    rows.append(row)
+
+            df = pd.DataFrame(rows, columns=[
+                "issueKey", "worklogId", "started", "timeSpent", "timeSpentSeconds",
+                "authorDisplayName", "authorAccountId", "updated", "commentText"
+            ])
+
+            df_display = df.drop(columns=["timeSpentSeconds", "authorAccountId", "updated"], errors="ignore")
+
+            if df.empty:
+                total_hours = 0.0
+            else:
+                total_seconds = int(df["timeSpentSeconds"].sum())
+                total_hours = total_seconds / 3600.0
+
+            # UI 갱신 예약
+            self.after(0, self._update_result, df_display, total_hours)
+
+        except Exception as e:
+            self.after(0, self._handle_error, e)
+
+    # =========================
+    # UI 유틸
+    # =========================
+
+    def _update_result(self, df_display: pd.DataFrame, total_hours: float):
+        self._df_display = df_display
+        self._fill_table_from_df(df_display)
+        self.lbl_status.config(text=f"합계(시간): {total_hours:.2f} h")
+        self._lock_ui(False)
+
+    def _handle_error(self, e: Exception):
+        self._lock_ui(False)
+        messagebox.showerror("오류", f"처리 중 오류가 발생했습니다:\n{e}")
+
+    def _lock_ui(self, lock: bool):
+        state = tk.DISABLED if lock else tk.NORMAL
+        self.btn_query.config(state=state)
+        self.btn_save_csv.config(
+            state=state if (self._df_display is not None and not self._df_display.empty and not lock) else tk.DISABLED
+        )
+        if lock:
+            self.progress.start(10)
         else:
-            print("# No Worklogs found.")
-        # 총 시간을 시간, 분, 초로 변환
-        total_hours = total_time_spent_seconds // 3600
-        remaining_minutes = (total_time_spent_seconds % 3600) // 60
-        seconds = total_time_spent_seconds % 60
-    try: total_hours
-    except NameError:
-        total_hours = 0
-        remaining_minutes = 0
-        seconds = 0
-    print(f"\n# Total time spent on issues: \n{total_hours}:{remaining_minutes}:{seconds}")
-else:
-    print(f"Failed to fetch data: {response.status_code}, {response.text}")
+            self.progress.stop()
 
+    def _clear_table(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+    def _fill_table_from_df(self, df_display: pd.DataFrame):
+        self._clear_table()
+        if df_display is None or df_display.empty:
+            self.btn_save_csv.config(state=tk.DISABLED)
+            return
+
+        # 행 삽입
+        for _, row in df_display.iterrows():
+            values = (
+                row.get("issueKey", ""),
+                row.get("worklogId", ""),
+                row.get("started", ""),
+                row.get("timeSpent", ""),
+                row.get("authorDisplayName", ""),
+                row.get("commentText", ""),
+            )
+            self.tree.insert("", tk.END, values=values)
+
+        self.btn_save_csv.config(state=tk.NORMAL)
+
+
+# 진입점
+if __name__ == "__main__":
+    app = JiraWorklogGUI()
+    app.mainloop()
