@@ -5,12 +5,17 @@
 * 파이썬 패키지 관리자 uv가 설치되어 있을 것
 
 ## uv 설치 방법
-* scoop를 이용하여 설치 (유저권한,권장)
+* scoop를 이용하여 설치 (유저권한, 권장, scoop 패키지 관리자를 사용하는 경우)
 ```
 scoop install uv
 ```
 
-* 정규 배포판으로 설치 방법
+* winget을 이용하여 설치 (유저권한, 권장, MS-Windows 11 사용하는 경우)
+```
+winget install --id=astral-sh.uv -e
+```
+
+* 정규 배포판으로 설치 방법 (관리자권한)
 ```
 # Powershell을 관리자 권한으로 실행한 후, 아래 명령어 입력해서 실행
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
