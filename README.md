@@ -38,7 +38,12 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 * 바로가기 아이콘을 원하는 위치에 배치해 두고 사용
 * 바로가기 아이콘 설정에서, 'robot_1211_V01.ico' 파일을 지정해서 예쁜 아이콘으로 변경 가능함
 
+## UV 가상환경 체크하기
+* `./JIRA_WORKLOG` 폴더에서 터미널 열기
+* `uv venv` 명령 입력 (가상환경 초기화)
+
 ## 실행하기
+* `JIRA_WORKLOG.bat` 파일 더블클릭해서 실행
 * Worklog 기록된 시간을 알고싶은 날짜를 입력하고 실행버튼 클릭하면 됨
 * 맨 마지막 업무시간이 전체 합산 시간임
 
