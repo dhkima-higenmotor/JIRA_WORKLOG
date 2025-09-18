@@ -240,7 +240,7 @@ class JiraWorklogGUI(tk.Tk):
     def _build_bottom(self):
         frm = ttk.Frame(self, padding=(10, 5, 10, 10))
         frm.pack(side=tk.BOTTOM, fill=tk.X)
-        self.lbl_status = ttk.Label(frm, text="합계(시간): 0.00 h")
+        self.lbl_status = ttk.Label(frm, text="합계(시간): 0.00 h", font="25")
         self.lbl_status.pack(side=tk.LEFT)
         self.lbl_hint = ttk.Label(
             frm,
@@ -454,4 +454,5 @@ class JiraWorklogGUI(tk.Tk):
 
 if __name__ == "__main__":
     app = JiraWorklogGUI()
+    app.iconbitmap('robot_1211_V01.ico')
     app.mainloop()
