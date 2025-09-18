@@ -74,10 +74,6 @@ def iter_issue_worklogs(sess: requests.Session, issue_key: str, page_size=100):
         if start_at >= total:
             break
 
-def parse_started_date(started_str: str) -> str:
-    dt = datetime.strptime(started_str, "%Y-%m-%dT%H:%M:%S.%f%z")
-    return dt.date().isoformat()
-
 def extract_comment_text(adf) -> str:
     try:
         if isinstance(adf, str):
@@ -109,6 +105,20 @@ def extract_comment_text(adf) -> str:
     except Exception:
         return ""
 
+def to_adf_comment(text: str) -> dict:
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": text or ""}
+                ]
+            }
+        ]
+    }
+
 def format_started_kor(started_str: str) -> str:
     try:
         dt = datetime.strptime(started_str, "%Y-%m-%dT%H:%M:%S.%f%z")
@@ -117,6 +127,34 @@ def format_started_kor(started_str: str) -> str:
         return f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}({w}) {dt.hour:02d}:{dt.minute:02d}"
     except Exception:
         return started_str
+
+def update_worklog_remote(issue_key, worklog_id, time_spent, comment, started,
+                          api_token=None, user_email=None):
+    url = f"{BASE_URL}issue/{issue_key}/worklog/{worklog_id}"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    data = {}
+    if time_spent is not None:
+        data["timeSpent"] = time_spent
+    if comment is not None:
+        data["comment"] = to_adf_comment(comment)
+    if started:
+        data["started"] = started
+    if api_token is None:
+        api_token = read_text("jira_api_token.txt")
+    if user_email is None:
+        user_email = read_text("user_email.txt")
+    r = requests.put(
+        url,
+        auth=HTTPBasicAuth(user_email, api_token),
+        headers=headers,
+        json=data,
+        timeout=30
+    )
+    r.raise_for_status()
+    return r.json()
 
 class EntryPopup(ttk.Entry):
     def __init__(self, parent, tree, iid, col_index, text, finish_edit_callback, **kw):
@@ -136,10 +174,8 @@ class EntryPopup(ttk.Entry):
     def on_return(self, event=None):
         self.finish_edit_callback(self.get(), self.iid, self.col_index)
         self.destroy()
-
     def on_esc(self, event=None):
         self.destroy()
-
     def on_focus_out(self, event=None):
         self.destroy()
 
@@ -153,10 +189,11 @@ class JiraWorklogGUI(tk.Tk):
         self._df = pd.DataFrame()
         self._df_display = pd.DataFrame()
         self._entry_popup = None
+        self._api_token = read_text("jira_api_token.txt")
+        self._user_email = read_text("user_email.txt")
         self._build_top()
         self._build_table()
         self._build_bottom()
-        #self._bind_shortcuts()
         self.entry_date.insert(0, date.today().isoformat())
 
     def _build_top(self):
@@ -205,63 +242,11 @@ class JiraWorklogGUI(tk.Tk):
         frm.pack(side=tk.BOTTOM, fill=tk.X)
         self.lbl_status = ttk.Label(frm, text="합계(시간): 0.00 h")
         self.lbl_status.pack(side=tk.LEFT)
-        self.lbl_hint = ttk.Label(frm, text="* 셀을 더블클릭해서 수정해도 Jira에 반영되지 않습니다. 단순 복사용도입니다.\n* jira_api_token.txt 및 user_email.txt 파일이 같은 폴더에 있어야 합니다.")
+        self.lbl_hint = ttk.Label(
+            frm,
+            text="* TimeSpent, Comment 셀을 더블클릭해 수정하면 Jira에 바로 반영됩니다.\n* jira_api_token.txt 및 user_email.txt 파일이 같은 폴더에 필요."
+        )
         self.lbl_hint.pack(side=tk.RIGHT)
-
-    '''
-    def _bind_shortcuts(self):
-        for seq in ("<Control-c>", "<Control-C>"):
-            self.tree.bind(seq, self.on_copy_selection)
-        for seq in ("<Control-a>", "<Control-A>"):
-            self.tree.bind(seq, self.on_copy_all)
-        self.bind_all("<Control-c>", self.on_copy_selection)
-        self.bind_all("<Control-a>", self.on_copy_all)
-        self.bind_all("<Control-A>", self.on_copy_all)
-    '''
-
-    def _get_table_headers(self):
-        cols = self.tree["columns"]
-        headers = [self.tree.heading(c)["text"] for c in cols]
-        return cols, headers
-
-    def _copy_rows_to_clipboard(self, item_ids):
-        if not item_ids:
-            return
-        cols, headers = self._get_table_headers()
-        lines = []
-        lines.append("\t".join(headers))
-        for iid in item_ids:
-            vals = self.tree.item(iid, "values")
-            row = [str(vals[idx]) if idx < len(vals) else "" for idx, _c in enumerate(cols)]
-            row = [s.replace("\r", " ").replace("\n", " ") for s in row]
-            lines.append("\t".join(row))
-        text = "\n".join(lines)
-        try:
-            self.clipboard_clear()
-            self.clipboard_append(text)
-            self.update()
-        except Exception as e:
-            messagebox.showerror("클립보드 오류", f"클립보드 복사 중 오류가 발생했습니다:\n{e}")
-
-    def on_copy_selection(self, event=None):
-        sel = self.tree.selection()
-        if not sel:
-            return "break"
-        order = {iid: idx for idx, iid in enumerate(self.tree.get_children(""))}
-        sel_sorted = sorted(sel, key=lambda x: order.get(x, 0))
-        self._copy_rows_to_clipboard(sel_sorted)
-        return "break"
-
-    def on_copy_all(self, event=None):
-        all_items = self.tree.get_children("")
-        if not all_items:
-            return "break"
-        self._copy_rows_to_clipboard(all_items)
-        try:
-            self.tree.selection_set(all_items)
-        except Exception:
-            pass
-        return "break"
 
     def on_query(self):
         if self._worker and self._worker.is_alive():
@@ -313,6 +298,7 @@ class JiraWorklogGUI(tk.Tk):
                 total_hours = 0.0
                 self.after(0, self._update_result, df_display, total_hours)
                 return
+
             rows = []
             for key in issue_keys:
                 for wl in iter_issue_worklogs(sess, key, page_size=100):
@@ -323,6 +309,9 @@ class JiraWorklogGUI(tk.Tk):
                     started_raw = wl.get("started", "")
                     if not started_raw:
                         continue
+                    def parse_started_date(started_str):
+                        dt = datetime.strptime(started_str, "%Y-%m-%dT%H:%M:%S.%f%z")
+                        return dt.date().isoformat()
                     if parse_started_date(started_raw) != date_str:
                         continue
                     row = {
@@ -401,32 +390,66 @@ class JiraWorklogGUI(tk.Tk):
         col = self.tree.identify_column(event.x)
         if not rowid or not col or col == "#0":
             return
+        col_index = int(col[1:]) - 1
+        if self.cols[col_index] not in ("timeSpent", "commentText"):
+            return
         if self._entry_popup:
             self._entry_popup.destroy()
         x, y, width, height = self.tree.bbox(rowid, col)
-        col_index = int(col[1:]) - 1
         original_text = self.tree.item(rowid, "values")[col_index]
         self._entry_popup = EntryPopup(
-            self.tree,
-            self.tree,  # parent tree
-            rowid,
-            col_index,
-            original_text,
-            self._on_edit_finish)
+            self.tree, self.tree, rowid, col_index, original_text, self._on_edit_finish
+        )
         self._entry_popup.place(x=x, y=y, width=width, height=height)
 
     def _on_edit_finish(self, new_value, rowid, col_index):
         item_values = list(self.tree.item(rowid, "values"))
+        colname = self.cols[col_index]
+        old_value = item_values[col_index]
         item_values[col_index] = new_value
         self.tree.item(rowid, values=item_values)
-        # 내부 DataFrame까지 반영
+
+        idx = list(self.tree.get_children()).index(rowid)
         if self._df_display is not None and not self._df_display.empty:
-            idx = list(self.tree.get_children()).index(rowid)
-            colname = self.cols[col_index]
             try:
                 self._df_display.at[self._df_display.index[idx], colname] = new_value
             except Exception:
                 pass
+
+        issue_key = item_values[self.cols.index("issueKey")]
+        worklog_id = item_values[self.cols.index("worklogId")]
+
+        def do_update():
+            try:
+                if colname == "timeSpent":
+                    update_worklog_remote(
+                        issue_key, worklog_id,
+                        time_spent=new_value,
+                        comment=None,
+                        started=None,
+                        api_token=self._api_token,
+                        user_email=self._user_email
+                    )
+                elif colname == "commentText":
+                    update_worklog_remote(
+                        issue_key, worklog_id,
+                        time_spent=None,
+                        comment=new_value,
+                        started=None,
+                        api_token=self._api_token,
+                        user_email=self._user_email
+                    )
+            except Exception as e:
+                # 오류 시 롤백
+                self.after(0, lambda: messagebox.showerror("Jira 업데이트 실패", f"Jira Worklog 반영 오류: {e}"))
+                item_values[col_index] = old_value
+                self.after(0, lambda: self.tree.item(rowid, values=item_values))
+                if self._df_display is not None and not self._df_display.empty:
+                    try:
+                        self._df_display.at[self._df_display.index[idx], colname] = old_value
+                    except Exception:
+                        pass
+        threading.Thread(target=do_update, daemon=True).start()
         self._entry_popup = None
 
 if __name__ == "__main__":
