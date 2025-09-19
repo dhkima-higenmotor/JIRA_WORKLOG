@@ -129,7 +129,7 @@ def format_started_kor(started_str: str) -> str:
         return started_str
 
 def update_worklog_remote(issue_key, worklog_id, time_spent, comment, started,
-                          api_token=None, user_email=None):
+                                              api_token=None, user_email=None):
     url = f"{BASE_URL}issue/{issue_key}/worklog/{worklog_id}"
     headers = {
         "Accept": "application/json",
@@ -142,6 +142,7 @@ def update_worklog_remote(issue_key, worklog_id, time_spent, comment, started,
         data["comment"] = to_adf_comment(comment)
     if started:
         data["started"] = started
+
     if api_token is None:
         api_token = read_text("jira_api_token.txt")
     if user_email is None:
@@ -155,6 +156,24 @@ def update_worklog_remote(issue_key, worklog_id, time_spent, comment, started,
     )
     r.raise_for_status()
     return r.json()
+
+def fetch_issue_info_enhanced(sess: requests.Session, issue_key: str) -> dict:
+    """Enhanced JQL 기반으로 특정 이슈의 주요 정보를 반환 (summary, status, assignee, updated 등)"""
+    url = BASE_URL + "search/jql"
+    jql = f"key = \"{issue_key}\""
+    fields = ["summary", "status", "assignee", "updated", "creator", "reporter"]
+    payload = {
+        "jql": jql,
+        "fields": fields,
+        "maxResults": 1
+    }
+    r = sess.post(url, json=payload, timeout=45)
+    r.raise_for_status()
+    data = r.json()
+    issues = data.get("issues", [])
+    if not issues:
+        return {}
+    return issues[0].get("fields", {})
 
 class EntryPopup(ttk.Entry):
     def __init__(self, parent, tree, iid, col_index, text, finish_edit_callback, **kw):
@@ -170,7 +189,6 @@ class EntryPopup(ttk.Entry):
         self.bind("<Return>", self.on_return)
         self.bind("<Escape>", self.on_esc)
         self.bind("<FocusOut>", self.on_focus_out)
-
     def on_return(self, event=None):
         self.finish_edit_callback(self.get(), self.iid, self.col_index)
         self.destroy()
@@ -244,7 +262,7 @@ class JiraWorklogGUI(tk.Tk):
         self.lbl_status.pack(side=tk.LEFT)
         self.lbl_hint = ttk.Label(
             frm,
-            text="* TimeSpent, Comment 셀을 더블클릭해 수정하면 Jira에 바로 반영됩니다.\n* jira_api_token.txt 및 user_email.txt 파일이 같은 폴더에 필요."
+            text="* Issue Key 셀을 더블클릭하면 해당 이슈의 정보를 확인할 수 있습니다.\n* TimeSpent, Comment 셀을 더블클릭후 수정하면 Jira에 바로 반영됩니다.\n* jira_api_token.txt 및 user_email.txt 파일이 같은 폴더에 있어야 합니다."
         )
         self.lbl_hint.pack(side=tk.RIGHT)
 
@@ -298,7 +316,6 @@ class JiraWorklogGUI(tk.Tk):
                 total_hours = 0.0
                 self.after(0, self._update_result, df_display, total_hours)
                 return
-
             rows = []
             for key in issue_keys:
                 for wl in iter_issue_worklogs(sess, key, page_size=100):
@@ -391,12 +408,21 @@ class JiraWorklogGUI(tk.Tk):
         if not rowid or not col or col == "#0":
             return
         col_index = int(col[1:]) - 1
-        if self.cols[col_index] not in ("timeSpent", "commentText"):
+
+        col_name = self.cols[col_index]
+        values = self.tree.item(rowid, "values")
+        if col_name == "issueKey":  # 이슈 상세 팝업
+            issue_key = values[col_index]
+            self.show_issue_info_popup(issue_key)
             return
+
+        if col_name not in ("timeSpent", "commentText"):
+            return
+
         if self._entry_popup:
             self._entry_popup.destroy()
         x, y, width, height = self.tree.bbox(rowid, col)
-        original_text = self.tree.item(rowid, "values")[col_index]
+        original_text = values[col_index]
         self._entry_popup = EntryPopup(
             self.tree, self.tree, rowid, col_index, original_text, self._on_edit_finish
         )
@@ -408,17 +434,14 @@ class JiraWorklogGUI(tk.Tk):
         old_value = item_values[col_index]
         item_values[col_index] = new_value
         self.tree.item(rowid, values=item_values)
-
         idx = list(self.tree.get_children()).index(rowid)
         if self._df_display is not None and not self._df_display.empty:
             try:
                 self._df_display.at[self._df_display.index[idx], colname] = new_value
             except Exception:
                 pass
-
         issue_key = item_values[self.cols.index("issueKey")]
         worklog_id = item_values[self.cols.index("worklogId")]
-
         def do_update():
             try:
                 if colname == "timeSpent":
@@ -451,6 +474,39 @@ class JiraWorklogGUI(tk.Tk):
                         pass
         threading.Thread(target=do_update, daemon=True).start()
         self._entry_popup = None
+
+    def show_issue_info_popup(self, issue_key):
+        def worker():
+            try:
+                sess = get_session(self._user_email, self._api_token)
+                info = fetch_issue_info_enhanced(sess, issue_key)
+                fields = []
+                if info:
+                    summary = info.get("summary", "")
+                    status = (info.get("status") or {}).get("name", "")
+                    assignee = ((info.get("assignee") or {}).get("displayName", "")
+                                if info.get("assignee") else "")
+                    updated = info.get("updated", "")
+                    creator = ((info.get("creator") or {}).get("displayName", "")
+                                if info.get("creator") else "")
+                    reporter = ((info.get("reporter") or {}).get("displayName", "")
+                                if info.get("reporter") else "")
+                    fields = [
+                        f"Issue Key: {issue_key}",
+                        f"Summary: {summary}",
+                        f"Status: {status}",
+                        f"Assignee: {assignee}",
+                        f"Reporter: {reporter}",
+                        f"Creator: {creator}",
+                        f"Updated: {updated}"
+                    ]
+                else:
+                    fields = [f"Issue Key: {issue_key}", "이슈 상세 정보를 찾을 수 없습니다."]
+                msg = "\n".join(fields)
+                self.after(0, lambda: messagebox.showinfo(f"Issue Info: {issue_key}", msg))
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror("이슈 정보 오류", str(e)))
+        threading.Thread(target=worker, daemon=True).start()
 
 if __name__ == "__main__":
     app = JiraWorklogGUI()
