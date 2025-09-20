@@ -1,10 +1,12 @@
 import threading
+
 import requests
 from requests.auth import HTTPBasicAuth
 import pandas as pd
 from datetime import datetime, date
 from pathlib import Path
 import sys
+
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
@@ -129,7 +131,7 @@ def format_started_kor(started_str: str) -> str:
         return started_str
 
 def update_worklog_remote(issue_key, worklog_id, time_spent, comment, started,
-                                              api_token=None, user_email=None):
+                         api_token=None, user_email=None):
     url = f"{BASE_URL}issue/{issue_key}/worklog/{worklog_id}"
     headers = {
         "Accept": "application/json",
@@ -142,7 +144,6 @@ def update_worklog_remote(issue_key, worklog_id, time_spent, comment, started,
         data["comment"] = to_adf_comment(comment)
     if started:
         data["started"] = started
-
     if api_token is None:
         api_token = read_text("jira_api_token.txt")
     if user_email is None:
@@ -158,10 +159,12 @@ def update_worklog_remote(issue_key, worklog_id, time_spent, comment, started,
     return r.json()
 
 def fetch_issue_info_enhanced(sess: requests.Session, issue_key: str) -> dict:
-    """Enhanced JQL 기반으로 특정 이슈의 주요 정보를 반환 (summary, status, assignee, updated 등)"""
+    """
+    Enhanced JQL 기반으로 특정 이슈의 주요 정보를 반환 (summary, status, assignee, updated 등)
+    """
     url = BASE_URL + "search/jql"
-    jql = f"key = \"{issue_key}\""
-    fields = ["summary", "status", "assignee", "updated", "creator", "reporter"]
+    jql = f'key = "{issue_key}"'
+    fields = ["project", "summary", "status", "assignee", "updated", "creator", "reporter", "startdate", "duedate", "description"]
     payload = {
         "jql": jql,
         "fields": fields,
@@ -189,11 +192,14 @@ class EntryPopup(ttk.Entry):
         self.bind("<Return>", self.on_return)
         self.bind("<Escape>", self.on_esc)
         self.bind("<FocusOut>", self.on_focus_out)
+
     def on_return(self, event=None):
         self.finish_edit_callback(self.get(), self.iid, self.col_index)
         self.destroy()
+
     def on_esc(self, event=None):
         self.destroy()
+
     def on_focus_out(self, event=None):
         self.destroy()
 
@@ -258,7 +264,7 @@ class JiraWorklogGUI(tk.Tk):
     def _build_bottom(self):
         frm = ttk.Frame(self, padding=(10, 5, 10, 10))
         frm.pack(side=tk.BOTTOM, fill=tk.X)
-        self.lbl_status = ttk.Label(frm, text="합계(시간): 0.00 h", font=("Malgun Gothic", 16, "bold"))
+        self.lbl_status = ttk.Label(frm, text="전체합계시간: 0.00 h", font=("Malgun Gothic", 16, "bold"))
         self.lbl_status.pack(side=tk.LEFT)
         self.lbl_hint = ttk.Label(
             frm,
@@ -278,7 +284,7 @@ class JiraWorklogGUI(tk.Tk):
             return
         self._lock_ui(True)
         self._clear_table()
-        self.lbl_status.config(text="합계(시간): 0.00 h")
+        self.lbl_status.config(text="전체합계시간: 0.00 h")
         self._worker = threading.Thread(target=self._run_query_worker, args=(date_str,), daemon=True)
         self._worker.start()
         self.progress.start(10)
@@ -360,7 +366,7 @@ class JiraWorklogGUI(tk.Tk):
     def _update_result(self, df_display: pd.DataFrame, total_hours: float):
         self._df_display = df_display
         self._fill_table_from_df(df_display)
-        self.lbl_status.config(text=f"합계(시간): {total_hours:.2f} h")
+        self.lbl_status.config(text=f"전체합계시간: {total_hours:.2f} h")
         self._lock_ui(False)
 
     def _handle_error(self, e: Exception):
@@ -408,17 +414,14 @@ class JiraWorklogGUI(tk.Tk):
         if not rowid or not col or col == "#0":
             return
         col_index = int(col[1:]) - 1
-
         col_name = self.cols[col_index]
         values = self.tree.item(rowid, "values")
         if col_name == "issueKey":  # 이슈 상세 팝업
             issue_key = values[col_index]
             self.show_issue_info_popup(issue_key)
             return
-
         if col_name not in ("timeSpent", "commentText"):
             return
-
         if self._entry_popup:
             self._entry_popup.destroy()
         x, y, width, height = self.tree.bbox(rowid, col)
@@ -442,6 +445,7 @@ class JiraWorklogGUI(tk.Tk):
                 pass
         issue_key = item_values[self.cols.index("issueKey")]
         worklog_id = item_values[self.cols.index("worklogId")]
+
         def do_update():
             try:
                 if colname == "timeSpent":
@@ -476,12 +480,46 @@ class JiraWorklogGUI(tk.Tk):
         self._entry_popup = None
 
     def show_issue_info_popup(self, issue_key):
+
+        def extract_adf_text_with_newline(adf) -> str:
+            """
+            Atlassian Document Format dict에서 순수 텍스트만 추출하고,
+            단락(문단, 헤딩, 리스트) 별로 줄바꿈을 삽입한다.
+            """
+            texts = []
+            def walk(node):
+                if isinstance(node, dict):
+                    ntype = node.get("type")
+                    # 텍스트 노드
+                    if ntype == "text" and "text" in node:
+                        texts.append(node["text"])
+                    # 줄바꿈이 들어가는 주요 블록
+                    elif ntype in ("paragraph", "heading", "listItem"):
+                        for key in ("content", "children"):
+                            if key in node and isinstance(node[key], list):
+                                for child in node[key]:
+                                    walk(child)
+                        texts.append("\n")
+                    # 일반 블록(리스트, 도큐먼트, etc)
+                    else:
+                        for key in ("content", "children"):
+                            if key in node and isinstance(node[key], list):
+                                for child in node[key]:
+                                    walk(child)
+                elif isinstance(node, list):
+                    for child in node:
+                        walk(child)
+            walk(adf)
+            # 줄바꿈 연속, 앞/뒤 공백 제거
+            return "\n".join(line.strip() for line in "".join(texts).splitlines() if line.strip())
+
         def worker():
             try:
                 sess = get_session(self._user_email, self._api_token)
                 info = fetch_issue_info_enhanced(sess, issue_key)
                 fields = []
                 if info:
+                    project = (info.get("project", "")).get("name", "")
                     summary = info.get("summary", "")
                     status = (info.get("status") or {}).get("name", "")
                     assignee = ((info.get("assignee") or {}).get("displayName", "")
@@ -491,22 +529,45 @@ class JiraWorklogGUI(tk.Tk):
                                 if info.get("creator") else "")
                     reporter = ((info.get("reporter") or {}).get("displayName", "")
                                 if info.get("reporter") else "")
+                    startdate = "Not Known" #info[0]["fields"].get("customfield_10429") if issues else None
+                    duedate = info.get("duedate", "")
+                    description = extract_adf_text_with_newline(info.get("description", ""))
                     fields = [
+                        f"# Project: {project}",
+                        f"",
                         f"Issue Key: {issue_key}",
                         f"Summary: {summary}",
                         f"Status: {status}",
                         f"Assignee: {assignee}",
                         f"Reporter: {reporter}",
                         f"Creator: {creator}",
-                        f"Updated: {updated}"
+                        f"Updated: {updated}",
+                        f"Start Date: {startdate}",
+                        f"Due Date: {duedate}",
+                        f"",
+                        f"",
+                        f"# Description:",
+                        f"",
+                        f"{description}"
                     ]
                 else:
                     fields = [f"Issue Key: {issue_key}", "이슈 상세 정보를 찾을 수 없습니다."]
                 msg = "\n".join(fields)
-                self.after(0, lambda: messagebox.showinfo(f"Issue Info: {issue_key}", msg))
+                self.after(0, lambda: self._show_info_text_popup(f"Issue Info: {issue_key}", msg))
             except Exception as e:
                 self.after(0, lambda: messagebox.showerror("이슈 정보 오류", str(e)))
         threading.Thread(target=worker, daemon=True).start()
+
+    def _show_info_text_popup(self, title, msg):
+        win = tk.Toplevel(self)
+        win.title(title)
+        win.geometry("400x350")
+        text = tk.Text(win, wrap="word", height=14, width=46, font=("Malgun Gothic", 11))
+        text.insert(1.0, msg)
+        text.configure(state=tk.DISABLED)
+        text.pack(fill=tk.BOTH, expand=True, padx=12, pady=9)
+        btn = ttk.Button(win, text="닫기", command=win.destroy)
+        btn.pack(pady=(0, 10))
 
 if __name__ == "__main__":
     app = JiraWorklogGUI()
