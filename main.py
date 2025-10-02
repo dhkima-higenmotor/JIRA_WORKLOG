@@ -207,8 +207,8 @@ class JiraWorklogGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("JIRA_WORKLOG 조회 프로그램")
-        self.geometry("1000x400")
-        self.minsize(1000, 200)
+        self.geometry("1000x300")
+        self.minsize(1000, 300)
         self._worker = None
         self._df = pd.DataFrame()
         self._df_display = pd.DataFrame()
@@ -238,7 +238,7 @@ class JiraWorklogGUI(tk.Tk):
         frm.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         cols = ("issueKey", "worklogId", "started", "timeSpent", "authorDisplayName", "commentText")
         self.cols = cols
-        self.tree = ttk.Treeview(frm, columns=cols, show="headings", height=10, selectmode="extended")
+        self.tree = ttk.Treeview(frm, columns=cols, show="headings", height=6, selectmode="extended")
         self.tree.heading("issueKey", text="Issue Key")
         self.tree.heading("worklogId", text="Worklog ID")
         self.tree.heading("started", text="Started")
