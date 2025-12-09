@@ -49,9 +49,19 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 * `./JIRA_WORKLOG` 폴더에서 터미널 열기
 * `uv venv` 명령 입력 (가상환경 초기화)
 
+## 조회하고자 하는 사용자 추가하기
+* `add_member.bat` 파일 더블클릭해서 실행
+* 조회 목록에 추가할 사용자의 이메일 입력
+* `Search` 버튼을 눌러서 정보 확인
+* `Add to members.csv` 버튼을 눌러서 추가 등록
+* 여러 사람을 계속 등록 가능함
+
 ## 실행하기
 * `JIRA_WORKLOG.bat` 파일 더블클릭해서 실행
 * Worklog 기록된 시간을 알고싶은 날짜를 입력하고 실행버튼 클릭하면 됨
 * 맨 마지막 업무시간이 전체 합산 시간임
-* Issue Key 셀을 더블클릭하면 팝업창으로 해당 이슈 정보 확인 가능 (신규추가기능)
-* TimeSpent, Comment 셀은 더블클릭해서 수정하면 Jira에도 바로 반영됨 (신규추가기능)
+* Issue Key 셀을 더블클릭하면 팝업창으로 해당 이슈 정보 확인 가능
+* TimeSpent, Comment 셀은 더블클릭해서 수정하면 Jira에도 바로 반영됨
+
+## 주의사항
+* 자신이 아닌 다른 사람의 업무로그를 조회할 때, 함부로 수정하지 말 것 (민폐)
