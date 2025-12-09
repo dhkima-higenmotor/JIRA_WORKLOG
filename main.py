@@ -18,6 +18,34 @@ def read_text(path: str) -> str:
         raise FileNotFoundError(f"파일이 없습니다: {path}")
     return p.read_text(encoding="utf-8").strip()
 
+def load_members(path: str) -> list:
+    """
+    members.csv 파일을 읽어서 (이름, accountId) 튜플 리스트를 반환한다.
+    파일 형식: 이름,accountId (헤더 없음 또는 무시 가능하지만 여기선 단순하게 처리)
+    """
+    p = Path(path)
+    members = []
+    if not p.exists():
+        return members
+    
+    try:
+        lines = p.read_text(encoding="utf-8").splitlines()
+        # 헤더(첫번째 행) 건너뛰기
+        if lines:
+            lines = lines[1:]
+        for line in lines:
+            if not line.strip() or line.strip().startswith("#"):
+                continue
+            parts = line.split(",")
+            if len(parts) >= 2:
+                name = parts[0].strip()
+                aid = parts[1].strip()
+                if name and aid:
+                    members.append((name, aid))
+    except Exception:
+        pass
+    return members
+
 def get_session(user_email: str, api_token: str) -> requests.Session:
     s = requests.Session()
     s.auth = HTTPBasicAuth(user_email, api_token)
@@ -215,6 +243,7 @@ class JiraWorklogGUI(tk.Tk):
         self._entry_popup = None
         self._api_token = read_text("jira_api_token.txt")
         self._user_email = read_text("user_email.txt")
+        self._members = load_members("members.csv")
         self._build_top()
         self._build_table()
         self._build_bottom()
@@ -226,6 +255,14 @@ class JiraWorklogGUI(tk.Tk):
         ttk.Label(frm, text="조회 날짜 (YYYY-MM-DD):").pack(side=tk.LEFT)
         self.entry_date = ttk.Entry(frm, width=16)
         self.entry_date.pack(side=tk.LEFT, padx=(6, 10))
+        
+        ttk.Label(frm, text="대상자:").pack(side=tk.LEFT)
+        self.cbo_users = ttk.Combobox(frm, width=15, state="readonly")
+        user_values = ["Current User"] + [name for name, aid in self._members]
+        self.cbo_users['values'] = user_values
+        self.cbo_users.current(0)
+        self.cbo_users.pack(side=tk.LEFT, padx=(6, 10))
+
         self.btn_query = ttk.Button(frm, text="조회", command=self.on_query)
         self.btn_query.pack(side=tk.LEFT)
         self.btn_save_csv = ttk.Button(frm, text="CSV 저장", command=self.on_save_csv, state=tk.DISABLED)
@@ -285,7 +322,16 @@ class JiraWorklogGUI(tk.Tk):
         self._lock_ui(True)
         self._clear_table()
         self.lbl_status.config(text="전체합계시간: 0.00 h")
-        self._worker = threading.Thread(target=self._run_query_worker, args=(date_str,), daemon=True)
+        
+        # 선택된 사용자 파악
+        selected_idx = self.cbo_users.current()
+        target_account_id = None
+        if selected_idx > 0: # 0 is Current User
+            # self._members is list of (name, aid)
+            # selected_idx-1 matches index in self._members
+            _, target_account_id = self._members[selected_idx-1]
+
+        self._worker = threading.Thread(target=self._run_query_worker, args=(date_str, target_account_id), daemon=True)
         self._worker.start()
         self.progress.start(10)
 
@@ -306,14 +352,23 @@ class JiraWorklogGUI(tk.Tk):
         except Exception as e:
             messagebox.showerror("오류", f"CSV 저장 중 오류가 발생했습니다:\n{e}")
 
-    def _run_query_worker(self, date_str: str):
+    def _run_query_worker(self, date_str: str, target_account_id: str = None):
         try:
             api_token = read_text("jira_api_token.txt")
             user_email = read_text("user_email.txt")
             sess = get_session(user_email, api_token)
-            account_id = get_current_account_id(sess)
-            Path("acountID.txt").write_text(account_id, encoding="utf-8")
-            jql = f"worklogAuthor = currentUser() AND worklogDate = '{date_str}'"
+            
+            my_account_id = get_current_account_id(sess)
+            Path("acountID.txt").write_text(my_account_id, encoding="utf-8")
+            
+            # target_account_id가 있으면 그 사람을 조회, 없으면 나(CurrentUser)
+            if not target_account_id:
+                target_account_id = my_account_id
+                jql_author = "currentUser()"
+            else:
+                jql_author = f"'{target_account_id}'"
+
+            jql = f"worklogAuthor = {jql_author} AND worklogDate = '{date_str}'"
             issue_keys = enhanced_search_issue_keys(sess, jql=jql, fields=["key"], page_size=100)
             if not issue_keys:
                 df_display = pd.DataFrame(columns=[
@@ -327,7 +382,9 @@ class JiraWorklogGUI(tk.Tk):
                 for wl in iter_issue_worklogs(sess, key, page_size=100):
                     wl_author = wl.get("author", {}) or {}
                     wl_account = wl_author.get("accountId", "")
-                    if wl_account != account_id:
+                    # 정확한 필터링: JQL로 1차 거르지만, worklogAuthor가 여러명일 수 있는 이슈 내에서
+                    # 해당 날짜/해당 작성자의 worklog만 추려야 함.
+                    if wl_account != target_account_id:
                         continue
                     started_raw = wl.get("started", "")
                     if not started_raw:
