@@ -6,6 +6,7 @@ import pandas as pd
 from datetime import datetime, date
 from pathlib import Path
 import sys
+import subprocess
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -20,8 +21,8 @@ def read_text(path: str) -> str:
 
 def load_members(path: str) -> list:
     """
-    members.csv 파일을 읽어서 (이름, accountId) 튜플 리스트를 반환한다.
-    파일 형식: 이름,accountId (헤더 없음 또는 무시 가능하지만 여기선 단순하게 처리)
+    members.csv 파일을 읽어서 (이름, accountId, email) 튜플 리스트를 반환한다.
+    파일 형식: 이름,accountId,email
     """
     p = Path(path)
     members = []
@@ -37,11 +38,15 @@ def load_members(path: str) -> list:
             if not line.strip() or line.strip().startswith("#"):
                 continue
             parts = line.split(",")
-            if len(parts) >= 2:
+            if len(parts) >= 3:
                 name = parts[0].strip()
                 aid = parts[1].strip()
-                if name and aid:
-                    members.append((name, aid))
+                email = parts[2].strip()
+                if name and aid and email:
+                    members.append((name, aid, email))
+            elif len(parts) >= 2:
+                # Fallback for old CSV format (no email) - user must fix
+                pass
     except Exception:
         pass
     return members
@@ -175,7 +180,7 @@ def update_worklog_remote(issue_key, worklog_id, time_spent, comment, started,
     if api_token is None:
         api_token = read_text("jira_api_token.txt")
     if user_email is None:
-        user_email = read_text("user_email.txt")
+        raise ValueError("User email is required.")
     r = requests.put(
         url,
         auth=HTTPBasicAuth(user_email, api_token),
@@ -238,16 +243,75 @@ class JiraWorklogGUI(tk.Tk):
         self.geometry("1000x300")
         self.minsize(1000, 300)
         self._worker = None
-        self._df = pd.DataFrame()
         self._df_display = pd.DataFrame()
         self._entry_popup = None
         self._api_token = read_text("jira_api_token.txt")
-        self._user_email = read_text("user_email.txt")
-        self._members = load_members("members.csv")
+        self._user_email = "" 
+        
+        # Load auth email
+        try:
+             self._auth_email = read_text("jira_api_email.txt")
+        except FileNotFoundError:
+             self._auth_email = ""
+
+        # Load members, if empty launch add_member.py
+        self._check_and_load_members()
+        
+        # Check auth email again (user might have entered it in add_member.py)
+        if not self._auth_email:
+             try:
+                 self._auth_email = read_text("jira_api_email.txt")
+             except FileNotFoundError:
+                 pass
+                 
+        if not self._auth_email:
+             # Launch add_member.py
+             messagebox.showinfo("안내", "인증용 이메일(jira_api_email.txt)이 없어 사용자 추가 프로그램을 실행합니다.\n'Your Email'을 입력하고 사용자를 추가/검색하면 생성됩니다.")
+             try:
+                 subprocess.run([sys.executable, "add_member.py"], check=True)
+             except Exception as e:
+                 messagebox.showerror("오류", f"사용자 추가 프로그램 실행 실패: {e}")
+
+             # Reload
+             try:
+                 self._auth_email = read_text("jira_api_email.txt")
+             except FileNotFoundError:
+                 pass
+
+             if not self._auth_email:
+                 messagebox.showwarning("경고", "인증용 이메일 파일이 생성되지 않았습니다. 프로그램 기능을 사용할 수 없습니다.")
+
         self._build_top()
         self._build_table()
         self._build_bottom()
+        
+        # Select first user by default if available
+        if self._members:
+             self.cbo_users.current(0)
+             self._on_user_select(None)
+        
         self.entry_date.insert(0, date.today().isoformat())
+
+    def _check_and_load_members(self):
+        self._members = load_members("members.csv")
+        if not self._members:
+            # Launch add_member.py
+            messagebox.showinfo("안내", "등록된 사용자가 없어 사용자 추가 프로그램을 실행합니다.\n추가 후 프로그램을 종료하면 다시 로드합니다.")
+            try:
+                subprocess.run([sys.executable, "add_member.py"], check=True)
+            except Exception as e:
+                messagebox.showerror("오류", f"사용자 추가 프로그램 실행 실패: {e}")
+                
+            # Reload
+            self._members = load_members("members.csv")
+            if not self._members:
+                messagebox.showwarning("경고", "사용자가 등록되지 않았습니다. 프로그램 기능을 사용할 수 없습니다.")
+
+    def _on_user_select(self, event):
+        idx = self.cbo_users.current()
+        if idx >= 0 and idx < len(self._members):
+            _, _, email = self._members[idx]
+            self._user_email = email
 
     def _build_top(self):
         frm = ttk.Frame(self, padding=(10, 10, 10, 5))
@@ -255,18 +319,26 @@ class JiraWorklogGUI(tk.Tk):
         ttk.Label(frm, text="조회 날짜 (YYYY-MM-DD):").pack(side=tk.LEFT)
         self.entry_date = ttk.Entry(frm, width=16)
         self.entry_date.pack(side=tk.LEFT, padx=(6, 10))
+
+        # Email Input Removed
         
         ttk.Label(frm, text="대상자:").pack(side=tk.LEFT)
         self.cbo_users = ttk.Combobox(frm, width=15, state="readonly")
-        user_values = ["Current User"] + [name for name, aid in self._members]
+        user_values = [name for name, aid, email in self._members]
         self.cbo_users['values'] = user_values
-        self.cbo_users.current(0)
+        if user_values:
+            self.cbo_users.current(0)
         self.cbo_users.pack(side=tk.LEFT, padx=(6, 10))
+        self.cbo_users.bind("<<ComboboxSelected>>", self._on_user_select)
 
         self.btn_query = ttk.Button(frm, text="조회", command=self.on_query)
         self.btn_query.pack(side=tk.LEFT)
         self.btn_save_csv = ttk.Button(frm, text="CSV 저장", command=self.on_save_csv, state=tk.DISABLED)
         self.btn_save_csv.pack(side=tk.LEFT, padx=(10, 0))
+        
+        self.btn_add_member = ttk.Button(frm, text="Add Member", command=self.on_add_member)
+        self.btn_add_member.pack(side=tk.LEFT, padx=(10, 0))
+
         self.progress = ttk.Progressbar(frm, mode="indeterminate", length=180)
         self.progress.pack(side=tk.RIGHT)
 
@@ -305,7 +377,7 @@ class JiraWorklogGUI(tk.Tk):
         self.lbl_status.pack(side=tk.LEFT)
         self.lbl_hint = ttk.Label(
             frm,
-            text="* Issue Key 셀을 더블클릭하면 해당 이슈의 정보를 확인할 수 있습니다.\n* TimeSpent, Comment 셀을 더블클릭후 수정하면 Jira에 바로 반영됩니다.\n* jira_api_token.txt 및 user_email.txt 파일이 같은 폴더에 있어야 합니다."
+            text="* Issue Key 셀을 더블클릭하면 해당 이슈의 정보를 확인할 수 있습니다.\n* TimeSpent, Comment 셀을 더블클릭후 수정하면 Jira에 바로 반영됩니다."
         )
         self.lbl_hint.pack(side=tk.RIGHT)
 
@@ -319,21 +391,50 @@ class JiraWorklogGUI(tk.Tk):
         except Exception as e:
             messagebox.showerror("날짜 오류", str(e))
             return
+            
+        selected_idx = self.cbo_users.current()
+        if selected_idx < 0:
+             messagebox.showwarning("입력 확인", "대상자를 선택해주세요.")
+             return
+             
+        name, target_account_id, target_user_email = self._members[selected_idx]
+        self._user_email = target_user_email
+
         self._lock_ui(True)
         self._clear_table()
         self.lbl_status.config(text="전체합계시간: 0.00 h")
         
-        # 선택된 사용자 파악
-        selected_idx = self.cbo_users.current()
-        target_account_id = None
-        if selected_idx > 0: # 0 is Current User
-            # self._members is list of (name, aid)
-            # selected_idx-1 matches index in self._members
-            _, target_account_id = self._members[selected_idx-1]
-
-        self._worker = threading.Thread(target=self._run_query_worker, args=(date_str, target_account_id), daemon=True)
+        self._worker = threading.Thread(target=self._run_query_worker, args=(date_str, self._auth_email, target_account_id), daemon=True)
         self._worker.start()
         self.progress.start(10)
+
+    def on_add_member(self):
+        try:
+            # Launch add_member.py and wait for it to finish
+            subprocess.run([sys.executable, "add_member.py"], check=True)
+            
+            # Refresh member list
+            self._members = load_members("members.csv")
+            
+            # Update Combobox
+            user_values = [name for name, aid, email in self._members]
+            self.cbo_users['values'] = user_values
+            
+            # Retain selection if possible, or select first
+            current_idx = self.cbo_users.current()
+            if self._members:
+                if current_idx >= 0 and current_idx < len(self._members):
+                    # re-select current
+                    self.cbo_users.current(current_idx)
+                else:
+                    self.cbo_users.current(0)
+                self._on_user_select(None)
+            else:
+                 self.cbo_users.set("")
+                 self._user_email = ""
+            
+        except Exception as e:
+            messagebox.showerror("오류", f"사용자 추가 프로그램 실행 중 오류: {e}")
 
     def on_save_csv(self):
         if self._df_display is None or self._df_display.empty:
@@ -352,17 +453,21 @@ class JiraWorklogGUI(tk.Tk):
         except Exception as e:
             messagebox.showerror("오류", f"CSV 저장 중 오류가 발생했습니다:\n{e}")
 
-    def _run_query_worker(self, date_str: str, target_account_id: str = None):
+    def _run_query_worker(self, date_str: str, auth_email: str, target_account_id: str = None):
         try:
             api_token = read_text("jira_api_token.txt")
-            user_email = read_text("user_email.txt")
-            sess = get_session(user_email, api_token)
+            # auth_email passed as arg (used for login)
+            if not auth_email:
+                 raise ValueError("인증용 이메일이 설정되지 않았습니다. (jira_api_email.txt)")
+                 
+            sess = get_session(auth_email, api_token)
             
             my_account_id = get_current_account_id(sess)
-            Path("acountID.txt").write_text(my_account_id, encoding="utf-8")
+            # acountID.txt creation removed as per user request
+
             
-            # target_account_id가 있으면 그 사람을 조회, 없으면 나(CurrentUser)
             if not target_account_id:
+                # Should not happen with new logic, but fallback
                 target_account_id = my_account_id
                 jql_author = "currentUser()"
             else:
@@ -512,7 +617,7 @@ class JiraWorklogGUI(tk.Tk):
                         comment=None,
                         started=None,
                         api_token=self._api_token,
-                        user_email=self._user_email
+                        user_email=self._auth_email
                     )
                 elif colname == "commentText":
                     update_worklog_remote(
@@ -521,7 +626,7 @@ class JiraWorklogGUI(tk.Tk):
                         comment=new_value,
                         started=None,
                         api_token=self._api_token,
-                        user_email=self._user_email
+                        user_email=self._auth_email
                     )
             except Exception as e:
                 # 오류 시 롤백
@@ -537,6 +642,8 @@ class JiraWorklogGUI(tk.Tk):
         self._entry_popup = None
 
     def show_issue_info_popup(self, issue_key):
+        email_for_popup = self._user_email
+
 
         def extract_adf_text_with_newline(adf) -> str:
             """
@@ -572,7 +679,12 @@ class JiraWorklogGUI(tk.Tk):
 
         def worker():
             try:
-                sess = get_session(self._user_email, self._api_token)
+                # Ensure we have the email from entry if distinct from last query, 
+                # but accessing entry from thread is bad practice. 
+                # However, this worker is short lived.
+                # Better to use self._user_email assuming query was run or user entered it.
+                # For safety, let's capture it in show_issue_info_popup scope
+                sess = get_session(self._auth_email, self._api_token)
                 info = fetch_issue_info_enhanced(sess, issue_key)
                 fields = []
                 if info:
