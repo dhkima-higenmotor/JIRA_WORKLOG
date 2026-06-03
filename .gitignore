@@ -20,3 +20,4 @@ members.csv
 jira_api_email.txt
 jira_api_email.txt*
 jira_api_token.txt*
+output/
