@@ -1,4 +1,5 @@
 import threading
+import calendar
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -211,6 +212,251 @@ def fetch_issue_info_enhanced(sess: requests.Session, issue_key: str) -> dict:
         return {}
     return issues[0].get("fields", {})
 
+class DatePickerDialog(tk.Toplevel):
+    def __init__(self, parent, initial_date=None, title="날짜 선택"):
+        super().__init__(parent)
+        self.title(title)
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+        
+        # Center the dialog on parent
+        parent_x = parent.winfo_rootx()
+        parent_y = parent.winfo_rooty()
+        parent_w = parent.winfo_width()
+        parent_h = parent.winfo_height()
+        x = parent_x + (parent_w - 260) // 2
+        y = parent_y + (parent_h - 240) // 2
+        self.geometry(f"260x240+{max(0, x)}+{max(0, y)}")
+        
+        if initial_date is None:
+            initial_date = datetime.today().date()
+        self.selected_date = initial_date
+        self.current_year = initial_date.year
+        self.current_month = initial_date.month
+        
+        self.result = None
+        
+        self._build_ui()
+        
+        self.bind("<Return>", lambda event: self._confirm())
+        self.bind("<Escape>", lambda event: self.destroy())
+
+    def _build_ui(self):
+        # Header: Prev Month, Year/Month Label, Next Month
+        header_frm = ttk.Frame(self, padding=5)
+        header_frm.pack(fill=tk.X)
+        
+        self.btn_prev = ttk.Button(header_frm, text="<", width=3, command=self._prev_month)
+        self.btn_prev.pack(side=tk.LEFT)
+        
+        self.lbl_month = ttk.Label(header_frm, text="", font=("Malgun Gothic", 10, "bold"), anchor="center")
+        self.lbl_month.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        self.btn_next = ttk.Button(header_frm, text=">", width=3, command=self._next_month)
+        self.btn_next.pack(side=tk.RIGHT)
+        
+        # Days of the week headers
+        week_frm = ttk.Frame(self, padding=2)
+        week_frm.pack(fill=tk.X)
+        days_headers = ["월", "화", "수", "목", "금", "토", "일"]
+        for i, d in enumerate(days_headers):
+            lbl = ttk.Label(week_frm, text=d, width=4, anchor="center", font=("Malgun Gothic", 9, "bold"))
+            lbl.grid(row=0, column=i, padx=1, pady=1)
+            if d == "토":
+                lbl.configure(foreground="blue")
+            elif d == "일":
+                lbl.configure(foreground="red")
+                
+        # Calendar grid frame
+        self.grid_frm = ttk.Frame(self, padding=2)
+        self.grid_frm.pack(fill=tk.BOTH, expand=True)
+        
+        self._draw_calendar()
+        
+        # Bottom buttons
+        btn_frm = ttk.Frame(self, padding=5)
+        btn_frm.pack(fill=tk.X)
+        ttk.Button(btn_frm, text="선택", command=self._confirm).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        ttk.Button(btn_frm, text="취소", command=self.destroy).pack(side=tk.RIGHT, padx=5, expand=True, fill=tk.X)
+        
+    def _draw_calendar(self):
+        for widget in self.grid_frm.winfo_children():
+            widget.destroy()
+            
+        self.lbl_month.config(text=f"{self.current_year}년 {self.current_month}월")
+        
+        cal = calendar.monthcalendar(self.current_year, self.current_month)
+        for r_idx, week in enumerate(cal):
+            for c_idx, day in enumerate(week):
+                if day == 0:
+                    lbl = ttk.Label(self.grid_frm, text="", width=4)
+                    lbl.grid(row=r_idx, column=c_idx, padx=1, pady=1)
+                else:
+                    btn = tk.Button(
+                        self.grid_frm, 
+                        text=str(day), 
+                        width=4, 
+                        relief="flat", 
+                        bg="#fcfcfc",
+                        activebackground="#dcdcdc",
+                        font=("Malgun Gothic", 9)
+                    )
+                    
+                    is_selected = (
+                        self.selected_date.year == self.current_year and
+                        self.selected_date.month == self.current_month and
+                        self.selected_date.day == day
+                    )
+                    if is_selected:
+                        btn.configure(bg="#0078d7", fg="white", activebackground="#005a9e", activeforeground="white")
+                    else:
+                        if c_idx == 5: # Saturday
+                            btn.configure(fg="blue")
+                        elif c_idx == 6: # Sunday
+                            btn.configure(fg="red")
+                            
+                    btn.configure(command=lambda d=day: self._select_day(d))
+                    btn.bind("<Double-Button-1>", lambda event, d=day: self._on_day_double_click(d))
+                    btn.grid(row=r_idx, column=c_idx, padx=1, pady=1)
+                    
+    def _select_day(self, day):
+        self.selected_date = date(self.current_year, self.current_month, day)
+        self._draw_calendar()
+        
+    def _on_day_double_click(self, day):
+        self.selected_date = date(self.current_year, self.current_month, day)
+        self._confirm()
+        
+    def _prev_month(self):
+        if self.current_month == 1:
+            self.current_month = 12
+            self.current_year -= 1
+        else:
+            self.current_month -= 1
+        self._draw_calendar()
+        
+    def _next_month(self):
+        if self.current_month == 12:
+            self.current_month = 1
+            self.current_year += 1
+        else:
+            self.current_month += 1
+        self._draw_calendar()
+        
+    def _confirm(self):
+        self.result = self.selected_date
+        self.destroy()
+
+
+class TimePickerDialog(tk.Toplevel):
+    def __init__(self, parent, initial_time=None, title="시간 선택"):
+        super().__init__(parent)
+        self.title(title)
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+        
+        parent_x = parent.winfo_rootx()
+        parent_y = parent.winfo_rooty()
+        parent_w = parent.winfo_width()
+        parent_h = parent.winfo_height()
+        x = parent_x + (parent_w - 220) // 2
+        y = parent_y + (parent_h - 180) // 2
+        self.geometry(f"220x180+{max(0, x)}+{max(0, y)}")
+        
+        if initial_time is None:
+            initial_time = datetime.now().time()
+        self.selected_time = initial_time
+        self.result = None
+        
+        self._build_ui()
+        
+        self.bind("<Return>", lambda event: self._confirm())
+        self.bind("<Escape>", lambda event: self.destroy())
+        
+    def _build_ui(self):
+        main_frm = ttk.Frame(self, padding=10)
+        main_frm.pack(fill=tk.BOTH, expand=True)
+        
+        picker_frm = ttk.Frame(main_frm)
+        picker_frm.pack(pady=5)
+        
+        # Spinbox for Hour
+        self.sp_hour = ttk.Spinbox(
+            picker_frm, 
+            from_=0, to=23, 
+            width=3, 
+            format="%02.0f", 
+            font=("Malgun Gothic", 16, "bold"),
+            justify="center",
+            wrap=True
+        )
+        self.sp_hour.pack(side=tk.LEFT, padx=5)
+        self.sp_hour.set(f"{self.selected_time.hour:02d}")
+        
+        lbl_sep = ttk.Label(picker_frm, text=":", font=("Malgun Gothic", 16, "bold"))
+        lbl_sep.pack(side=tk.LEFT, padx=2)
+        
+        # Spinbox for Minute
+        self.sp_min = ttk.Spinbox(
+            picker_frm, 
+            from_=0, to=59, 
+            width=3, 
+            format="%02.0f", 
+            font=("Malgun Gothic", 16, "bold"),
+            justify="center",
+            wrap=True
+        )
+        self.sp_min.pack(side=tk.LEFT, padx=5)
+        self.sp_min.set(f"{self.selected_time.minute:02d}")
+        
+        # Quick offset buttons
+        quick_frm = ttk.Frame(main_frm)
+        quick_frm.pack(pady=5)
+        
+        for offset in [-30, -10, 10, 30]:
+            lbl_sign = f"+{offset}" if offset > 0 else f"{offset}"
+            btn = ttk.Button(quick_frm, text=lbl_sign, width=5, command=lambda o=offset: self._adjust_minutes(o))
+            btn.pack(side=tk.LEFT, padx=2)
+            
+        # Bottom buttons
+        btn_frm = ttk.Frame(main_frm)
+        btn_frm.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btn_frm, text="선택", command=self._confirm).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        ttk.Button(btn_frm, text="취소", command=self.destroy).pack(side=tk.RIGHT, padx=5, expand=True, fill=tk.X)
+        
+    def _adjust_minutes(self, offset):
+        try:
+            curr_h = int(self.sp_hour.get())
+            curr_m = int(self.sp_min.get())
+        except ValueError:
+            curr_h = self.selected_time.hour
+            curr_m = self.selected_time.minute
+            
+        total_m = curr_h * 60 + curr_m + offset
+        total_m %= 1440
+        
+        new_h = total_m // 60
+        new_m = total_m % 60
+        
+        self.sp_hour.set(f"{new_h:02d}")
+        self.sp_min.set(f"{new_m:02d}")
+        
+    def _confirm(self):
+        try:
+            h = int(self.sp_hour.get())
+            m = int(self.sp_min.get())
+            if not (0 <= h <= 23 and 0 <= m <= 59):
+                raise ValueError()
+        except ValueError:
+            messagebox.showerror("오류", "시간 값이 올바르지 않습니다.")
+            return
+            
+        self.result = (h, m)
+        self.destroy()
+
+
 class EntryPopup(ttk.Entry):
     def __init__(self, parent, tree, iid, col_index, text, finish_edit_callback, **kw):
         super().__init__(parent, **kw)
@@ -290,7 +536,9 @@ class JiraWorklogGUI(tk.Tk):
              self.cbo_users.current(0)
              self._on_user_select(None)
         
+        self.entry_date.config(state="normal")
         self.entry_date.insert(0, date.today().isoformat())
+        self.entry_date.config(state="readonly")
 
     def _check_and_load_members(self):
         self._members = load_members("members.csv")
@@ -316,8 +564,9 @@ class JiraWorklogGUI(tk.Tk):
     def _build_top(self):
         frm = ttk.Frame(self, padding=(10, 10, 10, 5))
         frm.pack(side=tk.TOP, fill=tk.X)
-        ttk.Label(frm, text="조회 날짜 (YYYY-MM-DD):").pack(side=tk.LEFT)
-        self.entry_date = ttk.Entry(frm, width=16)
+        self.btn_select_date = ttk.Button(frm, text="조회날짜", command=self.on_select_query_date)
+        self.btn_select_date.pack(side=tk.LEFT)
+        self.entry_date = ttk.Entry(frm, width=12, state="readonly")
         self.entry_date.pack(side=tk.LEFT, padx=(6, 10))
 
         # Email Input Removed
@@ -369,17 +618,34 @@ class JiraWorklogGUI(tk.Tk):
         frm.rowconfigure(0, weight=1)
         frm.columnconfigure(0, weight=1)
         self.tree.bind("<Double-1>", self._on_tree_double_click)
+        self.tree.tag_configure("duplicate", foreground="red")
 
     def _build_bottom(self):
         frm = ttk.Frame(self, padding=(10, 5, 10, 10))
         frm.pack(side=tk.BOTTOM, fill=tk.X)
-        self.lbl_status = ttk.Label(frm, text="전체합계시간: 0.00 h", font=("Malgun Gothic", 16, "bold"))
+        self.lbl_status = ttk.Label(frm, text="전체합계시간: 0.00 h", font=("Malgun Gothic", 16, "bold"), foreground="red")
         self.lbl_status.pack(side=tk.LEFT)
         self.lbl_hint = ttk.Label(
             frm,
-            text="* Issue Key 셀을 더블클릭하면 해당 이슈의 정보를 확인할 수 있습니다.\n* TimeSpent, Comment 셀을 더블클릭후 수정하면 Jira에 바로 반영됩니다."
+            text="* Issue Key 셀을 더블클릭하면 해당 이슈의 정보를 확인할 수 있습니다.\n* Started, TimeSpent, Comment 셀을 더블클릭후 수정하면 Jira에 바로 반영됩니다."
         )
         self.lbl_hint.pack(side=tk.RIGHT)
+
+    def on_select_query_date(self):
+        current_date_str = self.entry_date.get().strip()
+        try:
+            initial_d = datetime.strptime(current_date_str, "%Y-%m-%d").date()
+        except Exception:
+            initial_d = date.today()
+            
+        dp = DatePickerDialog(self, initial_date=initial_d, title="조회 날짜 선택")
+        self.wait_window(dp)
+        if dp.result is not None:
+            selected_str = dp.result.isoformat()
+            self.entry_date.config(state="normal")
+            self.entry_date.delete(0, tk.END)
+            self.entry_date.insert(0, selected_str)
+            self.entry_date.config(state="readonly")
 
     def on_query(self):
         if self._worker and self._worker.is_alive():
@@ -402,7 +668,7 @@ class JiraWorklogGUI(tk.Tk):
 
         self._lock_ui(True)
         self._clear_table()
-        self.lbl_status.config(text="전체합계시간: 0.00 h")
+        self.lbl_status.config(text="전체합계시간: 0.00 h", foreground="red")
         
         self._worker = threading.Thread(target=self._run_query_worker, args=(date_str, self._auth_email, target_account_id), daemon=True)
         self._worker.start()
@@ -528,8 +794,39 @@ class JiraWorklogGUI(tk.Tk):
     def _update_result(self, df_display: pd.DataFrame, total_hours: float):
         self._df_display = df_display
         self._fill_table_from_df(df_display)
-        self.lbl_status.config(text=f"전체합계시간: {total_hours:.2f} h")
+        is_nine = abs(total_hours - 9.0) < 0.001
+        color = "black" if is_nine else "red"
+        self.lbl_status.config(text=f"전체합계시간: {total_hours:.2f} h", foreground=color)
         self._lock_ui(False)
+
+    def _update_total_hours(self):
+        total_hours = 0.0
+        import re
+        all_items = self.tree.get_children()
+        for item in all_items:
+            vals = self.tree.item(item, "values")
+            if vals and len(vals) >= 4:
+                time_spent_str = vals[3]
+                tokens = re.findall(r'(\d+(?:\.\d+)?)\s*([wdhm])', time_spent_str.lower())
+                if tokens:
+                    for val_str, unit in tokens:
+                        val = float(val_str)
+                        if unit == 'w':
+                            total_hours += val * 40
+                        elif unit == 'd':
+                            total_hours += val * 8
+                        elif unit == 'h':
+                            total_hours += val
+                        elif unit == 'm':
+                            total_hours += val / 60.0
+                else:
+                    try:
+                        total_hours += float(time_spent_str)
+                    except ValueError:
+                        pass
+        is_nine = abs(total_hours - 9.0) < 0.001
+        color = "black" if is_nine else "red"
+        self.lbl_status.config(text=f"전체합계시간: {total_hours:.2f} h", foreground=color)
 
     def _handle_error(self, e: Exception):
         self._lock_ui(False)
@@ -566,6 +863,29 @@ class JiraWorklogGUI(tk.Tk):
             )
             self.tree.insert("", tk.END, values=values)
         self.btn_save_csv.config(state=tk.NORMAL)
+        self._update_duplicate_tags()
+
+    def _update_duplicate_tags(self):
+        all_items = self.tree.get_children()
+        started_values = []
+        item_started_map = {}
+        for item in all_items:
+            vals = self.tree.item(item, "values")
+            if vals and len(vals) >= 3:
+                started_val = vals[2]
+                started_values.append(started_val)
+                item_started_map[item] = started_val
+        
+        counts = {}
+        for val in started_values:
+            counts[val] = counts.get(val, 0) + 1
+        duplicate_started = {val for val, count in counts.items() if count > 1}
+        
+        for item, started_val in item_started_map.items():
+            if started_val in duplicate_started:
+                self.tree.item(item, tags=("duplicate",))
+            else:
+                self.tree.item(item, tags=())
 
     def _on_tree_double_click(self, event):
         region = self.tree.identify("region", event.x, event.y)
@@ -582,6 +902,43 @@ class JiraWorklogGUI(tk.Tk):
             issue_key = values[col_index]
             self.show_issue_info_popup(issue_key)
             return
+        if col_name == "started":
+            # Parse existing cell value for initial value
+            initial_dt = None
+            original_text = values[col_index]
+            try:
+                # Format: 2026-06-04(목) 08:32
+                parts = original_text.split(")")
+                date_part = parts[0].split("(")[0].strip()
+                time_part = parts[1].strip()
+                initial_dt = datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M")
+            except Exception:
+                initial_dt = datetime.now()
+
+            # 1. Date Picker
+            dp = DatePickerDialog(self, initial_date=initial_dt.date())
+            self.wait_window(dp)
+            if dp.result is None:
+                return # Cancelled
+
+            # 2. Time Picker
+            tp = TimePickerDialog(self, initial_time=initial_dt.time())
+            self.wait_window(tp)
+            if tp.result is None:
+                return # Cancelled
+
+            # Combine and format
+            sel_date = dp.result
+            sel_hour, sel_min = tp.result
+            new_dt = datetime(sel_date.year, sel_date.month, sel_date.day, sel_hour, sel_min)
+            new_dt_tz = new_dt.astimezone()
+            
+            display_val = format_started_kor(new_dt_tz.strftime("%Y-%m-%dT%H:%M:%S.000%z"))
+            raw_val = new_dt_tz.strftime("%Y-%m-%dT%H:%M:%S.000%z")
+            
+            self._on_edit_finish(display_val, rowid, col_index, raw_value=raw_val)
+            return
+
         if col_name not in ("timeSpent", "commentText"):
             return
         if self._entry_popup:
@@ -592,13 +949,16 @@ class JiraWorklogGUI(tk.Tk):
             self.tree, self.tree, rowid, col_index, original_text, self._on_edit_finish
         )
         self._entry_popup.place(x=x, y=y, width=width, height=height)
-
-    def _on_edit_finish(self, new_value, rowid, col_index):
+ 
+    def _on_edit_finish(self, new_value, rowid, col_index, raw_value=None):
         item_values = list(self.tree.item(rowid, "values"))
         colname = self.cols[col_index]
         old_value = item_values[col_index]
         item_values[col_index] = new_value
         self.tree.item(rowid, values=item_values)
+        self._update_duplicate_tags()
+        if colname == "timeSpent":
+            self._update_total_hours()
         idx = list(self.tree.get_children()).index(rowid)
         if self._df_display is not None and not self._df_display.empty:
             try:
@@ -607,7 +967,7 @@ class JiraWorklogGUI(tk.Tk):
                 pass
         issue_key = item_values[self.cols.index("issueKey")]
         worklog_id = item_values[self.cols.index("worklogId")]
-
+ 
         def do_update():
             try:
                 if colname == "timeSpent":
@@ -628,11 +988,34 @@ class JiraWorklogGUI(tk.Tk):
                         api_token=self._api_token,
                         user_email=self._auth_email
                     )
+                elif colname == "started":
+                    started_val = raw_value
+                    if not started_val:
+                        try:
+                            # 2026-06-04(목) 08:32 -> ISO
+                            parts = new_value.split(")")
+                            date_part = parts[0].split("(")[0].strip()
+                            time_part = parts[1].strip()
+                            dt = datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M")
+                            started_val = dt.astimezone().strftime("%Y-%m-%dT%H:%M:%S.000%z")
+                        except Exception:
+                            started_val = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S.000%z")
+                    update_worklog_remote(
+                        issue_key, worklog_id,
+                        time_spent=None,
+                        comment=None,
+                        started=started_val,
+                        api_token=self._api_token,
+                        user_email=self._auth_email
+                    )
             except Exception as e:
                 # 오류 시 롤백
                 self.after(0, lambda: messagebox.showerror("Jira 업데이트 실패", f"Jira Worklog 반영 오류: {e}"))
                 item_values[col_index] = old_value
                 self.after(0, lambda: self.tree.item(rowid, values=item_values))
+                self.after(0, self._update_duplicate_tags)
+                if colname == "timeSpent":
+                    self.after(0, self._update_total_hours)
                 if self._df_display is not None and not self._df_display.empty:
                     try:
                         self._df_display.at[self._df_display.index[idx], colname] = old_value
