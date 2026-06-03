@@ -225,9 +225,9 @@ class DatePickerDialog(tk.Toplevel):
         parent_y = parent.winfo_rooty()
         parent_w = parent.winfo_width()
         parent_h = parent.winfo_height()
-        x = parent_x + (parent_w - 260) // 2
-        y = parent_y + (parent_h - 240) // 2
-        self.geometry(f"260x240+{max(0, x)}+{max(0, y)}")
+        x = parent_x + (parent_w - 320) // 2
+        y = parent_y + (parent_h - 290) // 2
+        self.geometry(f"320x290+{max(0, x)}+{max(0, y)}")
         
         if initial_date is None:
             initial_date = datetime.today().date()
@@ -259,10 +259,14 @@ class DatePickerDialog(tk.Toplevel):
         # Days of the week headers
         week_frm = ttk.Frame(self, padding=2)
         week_frm.pack(fill=tk.X)
+        
+        for col in range(7):
+            week_frm.columnconfigure(col, weight=1)
+            
         days_headers = ["월", "화", "수", "목", "금", "토", "일"]
         for i, d in enumerate(days_headers):
-            lbl = ttk.Label(week_frm, text=d, width=4, anchor="center", font=("Malgun Gothic", 9, "bold"))
-            lbl.grid(row=0, column=i, padx=1, pady=1)
+            lbl = ttk.Label(week_frm, text=d, anchor="center", font=("Malgun Gothic", 9, "bold"))
+            lbl.grid(row=0, column=i, padx=1, pady=1, sticky="nsew")
             if d == "토":
                 lbl.configure(foreground="blue")
             elif d == "일":
@@ -272,6 +276,9 @@ class DatePickerDialog(tk.Toplevel):
         self.grid_frm = ttk.Frame(self, padding=2)
         self.grid_frm.pack(fill=tk.BOTH, expand=True)
         
+        for col in range(7):
+            self.grid_frm.columnconfigure(col, weight=1)
+            
         self._draw_calendar()
         
         # Bottom buttons
@@ -287,16 +294,20 @@ class DatePickerDialog(tk.Toplevel):
         self.lbl_month.config(text=f"{self.current_year}년 {self.current_month}월")
         
         cal = calendar.monthcalendar(self.current_year, self.current_month)
+        
+        # Configure row weights dynamically based on number of weeks in month
+        for r_idx in range(len(cal)):
+            self.grid_frm.rowconfigure(r_idx, weight=1)
+            
         for r_idx, week in enumerate(cal):
             for c_idx, day in enumerate(week):
                 if day == 0:
-                    lbl = ttk.Label(self.grid_frm, text="", width=4)
-                    lbl.grid(row=r_idx, column=c_idx, padx=1, pady=1)
+                    lbl = ttk.Label(self.grid_frm, text="")
+                    lbl.grid(row=r_idx, column=c_idx, padx=1, pady=1, sticky="nsew")
                 else:
                     btn = tk.Button(
                         self.grid_frm, 
                         text=str(day), 
-                        width=4, 
                         relief="flat", 
                         bg="#fcfcfc",
                         activebackground="#dcdcdc",
@@ -318,7 +329,7 @@ class DatePickerDialog(tk.Toplevel):
                             
                     btn.configure(command=lambda d=day: self._select_day(d))
                     btn.bind("<Double-Button-1>", lambda event, d=day: self._on_day_double_click(d))
-                    btn.grid(row=r_idx, column=c_idx, padx=1, pady=1)
+                    btn.grid(row=r_idx, column=c_idx, padx=1, pady=1, sticky="nsew")
                     
     def _select_day(self, day):
         self.selected_date = date(self.current_year, self.current_month, day)
