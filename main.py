@@ -805,8 +805,8 @@ class JiraWorklogGUI(tk.Tk):
     def _update_result(self, df_display: pd.DataFrame, total_hours: float):
         self._df_display = df_display
         self._fill_table_from_df(df_display)
-        is_nine = abs(total_hours - 9.0) < 0.001
-        color = "black" if is_nine else "red"
+        in_range = 8.0 - 0.001 <= total_hours <= 9.0 + 0.001
+        color = "black" if in_range else "red"
         self.lbl_status.config(text=f"전체합계시간: {total_hours:.2f} h", foreground=color)
         self._lock_ui(False)
 
@@ -835,8 +835,8 @@ class JiraWorklogGUI(tk.Tk):
                         total_hours += float(time_spent_str)
                     except ValueError:
                         pass
-        is_nine = abs(total_hours - 9.0) < 0.001
-        color = "black" if is_nine else "red"
+        in_range = 8.0 - 0.001 <= total_hours <= 9.0 + 0.001
+        color = "black" if in_range else "red"
         self.lbl_status.config(text=f"전체합계시간: {total_hours:.2f} h", foreground=color)
 
     def _handle_error(self, e: Exception):
