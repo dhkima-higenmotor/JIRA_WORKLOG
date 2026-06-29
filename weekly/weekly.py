@@ -806,7 +806,7 @@ class ConfluenceBlogApp(tk.Tk):
         # 에디터로 생성된 파일 열기
         for _title, fpath in success:
             try:
-                subprocess.Popen(["marktext", str(fpath)], shell=True) # code
+                subprocess.Popen(["code", str(fpath)], shell=True) # code
             except Exception:
                 pass
 

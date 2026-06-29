@@ -21,3 +21,5 @@ jira_api_email.txt
 jira_api_email.txt*
 jira_api_token.txt*
 output/
+uv.lock
+.python-version
