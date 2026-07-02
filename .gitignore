@@ -23,3 +23,5 @@ jira_api_token.txt*
 output/
 uv.lock
 .python-version
+backup/
+config.json
