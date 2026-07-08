@@ -498,7 +498,7 @@ class JiraWorklogGUI(tk.Tk):
         super().__init__()
         self.title("JIRA_WORKLOG 조회 프로그램")
         self.geometry("1000x300")
-        self.minsize(1000, 300)
+        self.minsize(600, 300)
         self._worker = None
         self._df_display = pd.DataFrame()
         self._entry_popup = None
