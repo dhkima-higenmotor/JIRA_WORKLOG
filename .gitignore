@@ -10,18 +10,8 @@ wheels/
 .venv
 
 # User Profile
-jira_api_token.txt
-user_email.txt
-acopuntID.txt
-JiraWorklogViewer/
-acountID.txt
-worklog_report_personal*
-members.csv
-jira_api_email.txt
 jira_api_email.txt*
 jira_api_token.txt*
 output/
 uv.lock
 .python-version
-backup/
-config.json
