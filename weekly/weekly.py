@@ -593,8 +593,8 @@ class ConfluenceBlogApp(tk.Tk):
         self.btn_refresh_spaces = ttk.Button(top_frame, text="Space 새로고침", command=self._load_spaces)
         self.btn_refresh_spaces.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.progress = ttk.Progressbar(top_frame, mode="indeterminate", length=160)
-        self.progress.pack(side=tk.RIGHT)
+        self.progress = ttk.Label(top_frame, text="●", font=("", 16), foreground="green")
+        self.progress.pack(side=tk.RIGHT, padx=(10, 0))
 
         # ── 상태바 ────────────────────────────────────────────────────────
         self.lbl_status = ttk.Label(self, text="Space를 선택하면 블로그 목록을 불러옵니다.", anchor=tk.W)
@@ -806,7 +806,7 @@ class ConfluenceBlogApp(tk.Tk):
         # 에디터로 생성된 파일 열기
         for _title, fpath in success:
             try:
-                subprocess.Popen(["marktext", str(fpath)], shell=True) # code
+                subprocess.Popen(["code", str(fpath)], shell=True) # code
             except Exception:
                 pass
 
@@ -839,9 +839,9 @@ class ConfluenceBlogApp(tk.Tk):
         self.btn_refresh_spaces.config(state=state)
         self.cbo_space.config(state="disabled" if lock else "readonly")
         if lock:
-            self.progress.start(10)
+            self.progress.config(foreground="red")
         else:
-            self.progress.stop()
+            self.progress.config(foreground="green")
 
     def _is_busy(self) -> bool:
         if self._worker and self._worker.is_alive():

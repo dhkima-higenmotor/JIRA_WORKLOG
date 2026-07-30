@@ -5,14 +5,13 @@ build/
 dist/
 wheels/
 *.egg-info
-uv.lock
-.python-version
 
 # Virtual environments
 .venv
 
 # User Profile
-config.json
-backup/
-weekly/
-worklog_report_personal_V2.1/
+jira_api_email.txt*
+jira_api_token.txt*
+output/
+uv.lock
+.python-version
