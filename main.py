@@ -1461,6 +1461,8 @@ class JiraWorklogGUI(tk.Tk):
         self.btn_log_work.pack(side=tk.LEFT, padx=(10, 0))
         self.btn_weekly_draft = ttk.Button(frm, text="주간업무초안", command=self.on_weekly_draft)
         self.btn_weekly_draft.pack(side=tk.LEFT, padx=(10, 0))
+        self.btn_weekly = ttk.Button(frm, text="Weekly", command=self.on_weekly)
+        self.btn_weekly.pack(side=tk.LEFT, padx=(10, 0))
 
         self.progress = ttk.Label(frm, text="●", font=("", 16), foreground="green")
         self.progress.pack(side=tk.RIGHT, padx=(10, 0))
@@ -1682,6 +1684,16 @@ class JiraWorklogGUI(tk.Tk):
     def _on_weekly_draft_error(self, err_msg: str):
         self._lock_ui(False)
         messagebox.showerror("오류", f"주간업무초안 작성 중 오류가 발생했습니다:\n{err_msg}")
+
+    def on_weekly(self):
+        try:
+            weekly_script = Path("weekly/weekly.py")
+            if weekly_script.exists():
+                subprocess.Popen([sys.executable, str(weekly_script)])
+            else:
+                messagebox.showerror("오류", "weekly/weekly.py 파일을 찾을 수 없습니다.")
+        except Exception as e:
+            messagebox.showerror("오류", f"Weekly 실행 실패:\n{e}")
 
     def _run_query_worker(self, date_str: str, auth_email: str, target_account_id: str = None):
         try:
