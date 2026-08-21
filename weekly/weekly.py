@@ -13,6 +13,9 @@ import requests
 from requests.auth import HTTPBasicAuth
 import tkinter as tk
 from tkinter import ttk, messagebox
+from pptx import Presentation
+from pptx.util import Inches, Pt, Emu, Cm
+from pptx.enum.text import MSO_ANCHOR
 
 # ─── 경로 설정 ────────────────────────────────────────────────────────────────
 # 이 파일은 weekly/ 하위에 있으므로 프로젝트 루트는 한 단계 상위
@@ -414,6 +417,27 @@ def _convert_table(table_html: str) -> str:
         if not all(c.strip() in ("", "**주요항목**") for c in row)
     ]
 
+    # ── 2.8단계: 하위 태스크가 없는 프로젝트 제목행 제거 ────────────────
+    # 프로젝트 제목행 바로 다음 행이 또 프로젝트 제목행이면 해당 제목행 제거
+    # (2.6단계에서 열 삭제 후에는 원래 0열/3열이 새 0열/1열이 됨)
+    def _is_project_row(row: list[str]) -> bool:
+        if len(row) < 2:
+            return False
+        c0 = row[0].strip()
+        c1 = row[1].strip()
+        if c0.startswith("**") and c0.endswith("**") and c1.startswith("**") and c1.endswith("**"):
+            return c0[2:-2].strip() == c1[2:-2].strip()
+        return False
+
+    kept_rows = parsed_rows[:header_row_count]
+    for ri in range(header_row_count, len(parsed_rows)):
+        row = parsed_rows[ri]
+        next_row = parsed_rows[ri + 1] if ri + 1 < len(parsed_rows) else None
+        if _is_project_row(row) and next_row is not None and _is_project_row(next_row):
+            continue
+        kept_rows.append(row)
+    parsed_rows = kept_rows
+
     # ── 3단계: 열 개수 통일 및 포매팅 ─────────────────────────────────────
     max_cols = max(len(r) for r in parsed_rows)
     for row in parsed_rows:
@@ -545,6 +569,177 @@ def sanitize_filename(name: str) -> str:
     return name or "untitled"
 
 
+# ─── PPTX 변환 ───────────────────────────────────────────────────────────────
+
+def _md_body_to_blocks(md_body: str) -> list[tuple[str, object]]:
+    """
+    Markdown 본문을 블록 리스트로 분해한다.
+    ("table", rows) 또는 ("text", lines) 형태.
+    """
+    blocks: list[tuple[str, object]] = []
+    lines = md_body.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+        if line.startswith("|"):
+            table_rows: list[list[str]] = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                cells = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+                # 구분선(|---|---|) 행은 건너뛴다
+                if not all(re.fullmatch(r":?-{2,}:?", c) for c in cells):
+                    table_rows.append(cells)
+                i += 1
+            if table_rows:
+                blocks.append(("table", table_rows))
+        else:
+            text_lines: list[str] = []
+            while i < len(lines) and not lines[i].strip().startswith("|"):
+                t = lines[i].strip()
+                if t:
+                    text_lines.append(t)
+                i += 1
+            if text_lines:
+                blocks.append(("text", text_lines))
+    return blocks
+
+
+def _md_cell_to_text(cell: str) -> tuple[str, bool]:
+    """테이블 셀 텍스트에서 ** 마커를 제거하고 (텍스트, 굵게여부)를 반환한다."""
+    t = cell.strip()
+    bold = t.startswith("**") and t.endswith("**") and len(t) > 4
+    if bold:
+        t = t[2:-2].strip()
+    t = t.replace("**", "")
+    return t, bold
+
+
+def _set_cell_borders(cell, color: str = "000000", width_pt: float = 0.5):
+    """표 셀의 상하좌우 테두리를 지정 색상/굵기로 설정한다."""
+    from pptx.oxml.ns import qn
+    tc_pr = cell._tc.get_or_add_tcPr()
+    w = str(int(width_pt * 12700))  # pt → EMU
+    for tag in ("a:lnL", "a:lnR", "a:lnT", "a:lnB"):
+        for e in tc_pr.findall(qn(tag)):
+            tc_pr.remove(e)
+    lns = []
+    for tag in ("a:lnL", "a:lnR", "a:lnT", "a:lnB"):
+        ln = tc_pr.makeelement(qn(tag), {"w": w, "cap": "flat", "cmpd": "sng", "algn": "ctr"})
+        fill = ln.makeelement(qn("a:solidFill"), {})
+        clr = ln.makeelement(qn("a:srgbClr"), {"val": color})
+        fill.append(clr)
+        ln.append(fill)
+        lns.append(ln)
+    # tcPr의 자식 중 가장 앞에 순서대로 삽입 (스키마 순서 준수)
+    for idx, ln in enumerate(lns):
+        tc_pr.insert(idx, ln)
+
+
+def _create_post_pptx(title: str, md_body: str) -> Presentation:
+    """
+    블로그 게시물 하나를 PPTX Presentation으로 변환한다.
+    - A4 용지 가로 사이즈
+    - 표 블록: 표 전체를 하나의 슬라이드에 배치 (위치 (0,0), 폭 = 페이지 폭)
+      - 테두리: 흑색 0.5pt
+      - 헤더 행: 어두운 회색 배경 + 흰 글씨
+      - 프로젝트 제목행(굵은글씨 행) 배경: 옅은 회색, 나머지: 흰색
+    - 텍스트 블록: 텍스트 슬라이드 (제목 줄은 생략)
+    - 모든 폰트 크기: 8pt
+    - 표 이외의 제목(제목 슬라이드, 슬라이드 제목)은 생략
+    """
+    from pptx.dml.color import RGBColor
+
+    prs = Presentation()
+    prs.slide_width = Inches(11.69)   # A4 가로
+    prs.slide_height = Inches(8.27)
+
+    font_pt = 8
+    dark_gray = RGBColor(0x40, 0x40, 0x40)
+    gray = RGBColor(0xD9, 0xD9, 0xD9)
+    white = RGBColor(0xFF, 0xFF, 0xFF)
+
+    for kind, content in _md_body_to_blocks(md_body):
+        if kind == "text":
+            # 제목(# ...) 줄은 생략하고 본문 텍스트만 슬라이드에 넣는다
+            body_lines = [
+                re.sub(r"\*\*(.+?)\*\*", r"\1", line)
+                for line in content
+                if not re.match(r"^#{1,6}\s+", line)
+            ]
+            if not body_lines:
+                continue
+            slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank
+            textbox = slide.shapes.add_textbox(Inches(0.4), Inches(0.4), Inches(10.89), Inches(7.47))
+            tf = textbox.text_frame
+            tf.word_wrap = True
+            first = True
+            for line in body_lines:
+                p = tf.paragraphs[0] if first else tf.add_paragraph()
+                first = False
+                run = p.add_run()
+                run.text = line
+                run.font.size = Pt(font_pt)
+            continue
+
+        # 표 블록: 페이지 분할 없이 표 전체를 하나의 슬라이드에 담는다
+        rows: list[list[str]] = content
+        ncols = max(len(r) for r in rows)
+        nrows = len(rows)
+
+        slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank
+        left, top = Inches(0), Inches(0)
+        width = prs.slide_width  # 페이지 전체 폭
+        height = Inches(min(0.25 * nrows, 7.47))
+        table = slide.shapes.add_table(nrows, ncols, left, top, width, height).table
+        # 표(도형) 텍스트 상자 옵션: 위/아래 여백 0.05cm (tblPr 기본 셀 여백)
+        tbl_pr = table._tbl.tblPr
+        if tbl_pr is None:
+            from pptx.oxml.ns import qn
+            tbl_pr = table._tbl.makeelement(qn("a:tblPr"), {})
+            table._tbl.insert(0, tbl_pr)
+        tbl_pr.set("marT", str(int(Cm(0.05))))
+        tbl_pr.set("marB", str(int(Cm(0.05))))
+        col_w = Emu(int(width / ncols))
+        for ci in range(ncols):
+            table.columns[ci].width = col_w
+        for ri, row in enumerate(rows):
+            # 프로젝트 제목행 판별: 첫 데이터 행의 셀이 굵은글씨(**...**)인 행
+            is_project_row = any(
+                _md_cell_to_text(c)[1] for c in row if c.strip()
+            ) and ri > 0
+            for ci in range(ncols):
+                text, bold = _md_cell_to_text(row[ci] if ci < len(row) else "")
+                cell = table.cell(ri, ci)
+                cell.text = text
+                # 셀 위/아래 여백: 0.05cm (tcPr marT/marB - PowerPoint 표 옵션 여백)
+                cell.margin_top = Cm(0.05)
+                cell.margin_bottom = Cm(0.05)
+                # 세로 맞춤: 중간 (tcPr anchor="ctr")
+                cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+                for p in cell.text_frame.paragraphs:
+                    # 빈 셀(runs 없음)도 포함하여 폰트 크기 8pt 통일
+                    p.font.size = Pt(font_pt)
+                    for run in p.runs:
+                        run.font.size = Pt(font_pt)
+                        run.font.bold = bold or ri == 0
+                        if ri == 0:
+                            run.font.color.rgb = white  # 헤더는 흰 글씨
+                # 배경색: 헤더는 어두운 회색, 프로젝트 제목행은 옅은 회색, 나머지는 흰색
+                cell.fill.solid()
+                if ri == 0:
+                    cell.fill.fore_color.rgb = dark_gray
+                elif is_project_row:
+                    cell.fill.fore_color.rgb = gray
+                else:
+                    cell.fill.fore_color.rgb = white
+                # 테두리: 흑색 0.5pt
+                _set_cell_borders(cell)
+
+    return prs
+
+
 # ─── GUI ─────────────────────────────────────────────────────────────────────
 
 class ConfluenceBlogApp(tk.Tk):
@@ -604,18 +799,26 @@ class ConfluenceBlogApp(tk.Tk):
         btn_frame = ttk.Frame(self, padding=(10, 0, 10, 6))
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
+        # 먼저 pack되는 쪽이 더 오른쪽에 배치되므로 PPTX 버튼을 먼저 pack한다
+        self.btn_export_pptx = ttk.Button(
+            btn_frame, text="선택 블로그 PPTX로 저장", command=self._on_export_pptx, state=tk.DISABLED
+        )
+        self.btn_export_pptx.pack(side=tk.RIGHT)
+
         self.btn_export = ttk.Button(
             btn_frame, text="선택 블로그 MD로 저장", command=self._on_export, state=tk.DISABLED
         )
-        self.btn_export.pack(side=tk.RIGHT)
+        self.btn_export.pack(side=tk.RIGHT, padx=(0, 10))
 
         self.btn_export_all = ttk.Button(
             btn_frame, text="전체 블로그 MD로 저장", command=self._on_export_all, state=tk.DISABLED
         )
         self.btn_export_all.pack(side=tk.RIGHT, padx=(0, 10))
 
-        self.lbl_output = ttk.Label(btn_frame, text=f"출력 폴더: {OUTPUT_DIR}", foreground="gray")
-        self.lbl_output.pack(side=tk.LEFT)
+        self.btn_open_output = ttk.Button(
+            btn_frame, text="출력폴더열기", command=self._on_open_output
+        )
+        self.btn_open_output.pack(side=tk.LEFT)
 
         # ── 블로그 목록 테이블 ──────────────────────────────────────────────
         tbl_frame = ttk.Frame(self, padding=(10, 5, 10, 5))
@@ -658,7 +861,9 @@ class ConfluenceBlogApp(tk.Tk):
 
     def _on_post_select(self, event=None):
         selected = self.tree.selection()
-        self.btn_export.config(state=tk.NORMAL if selected else tk.DISABLED)
+        state = tk.NORMAL if selected else tk.DISABLED
+        self.btn_export.config(state=state)
+        self.btn_export_pptx.config(state=state)
 
     def _on_export(self):
         selected = self.tree.selection()
@@ -668,7 +873,22 @@ class ConfluenceBlogApp(tk.Tk):
         indices = [self.tree.index(iid) for iid in selected]
         posts = [self._posts[i] for i in indices if i < len(self._posts)]
         if posts:
-            self._export_posts(posts)
+            self._export_posts(posts, fmt="md")
+
+    def _on_open_output(self):
+        """출력 폴더를 윈도우 탐색기로 연다."""
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        subprocess.Popen(["explorer", str(OUTPUT_DIR)])
+
+    def _on_export_pptx(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showinfo("안내", "내보낼 블로그를 선택해 주세요.")
+            return
+        indices = [self.tree.index(iid) for iid in selected]
+        posts = [self._posts[i] for i in indices if i < len(self._posts)]
+        if posts:
+            self._export_posts(posts, fmt="pptx")
 
     def _on_export_all(self):
         if not self._posts:
@@ -722,6 +942,7 @@ class ConfluenceBlogApp(tk.Tk):
         self._lock_ui(True)
         self._clear_table()
         self.btn_export.config(state=tk.DISABLED)
+        self.btn_export_pptx.config(state=tk.DISABLED)
         self.btn_export_all.config(state=tk.DISABLED)
         t = threading.Thread(target=self._worker_load_posts, args=(space_key,), daemon=True)
         t.start()
@@ -744,16 +965,16 @@ class ConfluenceBlogApp(tk.Tk):
 
     # ── 내보내기 (비동기) ─────────────────────────────────────────────────────
 
-    def _export_posts(self, posts: list[dict]):
+    def _export_posts(self, posts: list[dict], fmt: str = "md"):
         if self._is_busy():
             return
         self._set_status(f"총 {len(posts)}개 블로그 내보내는 중…")
         self._lock_ui(True)
-        t = threading.Thread(target=self._worker_export, args=(posts,), daemon=True)
+        t = threading.Thread(target=self._worker_export, args=(posts, fmt), daemon=True)
         t.start()
         self._worker = t
 
-    def _worker_export(self, posts: list[dict]):
+    def _worker_export(self, posts: list[dict], fmt: str = "md"):
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         success, failed = [], []
         total = len(posts)
@@ -766,21 +987,19 @@ class ConfluenceBlogApp(tk.Tk):
                 html = fetch_blogpost_content(self._session, post_id)
                 md_body = confluence_storage_to_md(html)
 
-                # 메타 정보 헤더
-                history = post.get("history", {})
-                created_by = (history.get("createdBy") or {}).get("displayName", "")
-                created_date = history.get("createdDate", "")
-                if created_date:
-                    created_date = created_date[:10]  # YYYY-MM-DD
-
-                md_content = (
-                    f"# {title}\n\n"
-                    f"{md_body}\n"
-                )
-
-                filename = sanitize_filename(title) + ".md"
-                out_path = OUTPUT_DIR / filename
-                out_path.write_text(md_content, encoding="utf-8")
+                if fmt == "pptx":
+                    prs = _create_post_pptx(title, md_body)
+                    filename = sanitize_filename(title) + ".pptx"
+                    out_path = OUTPUT_DIR / filename
+                    prs.save(str(out_path))
+                else:
+                    md_content = (
+                        f"# {title}\n\n"
+                        f"{md_body}\n"
+                    )
+                    filename = sanitize_filename(title) + ".md"
+                    out_path = OUTPUT_DIR / filename
+                    out_path.write_text(md_content, encoding="utf-8")
                 success.append((title, out_path))
             except Exception as e:
                 failed.append(f"{post.get('title', '?')}: {e}")
@@ -796,19 +1015,34 @@ class ConfluenceBlogApp(tk.Tk):
                 + "\n".join(failed[:10])
             )
             messagebox.showwarning("내보내기 결과", msg)
-        else:
-            messagebox.showinfo(
-                "내보내기 완료",
-                f"{len(success)}개의 블로그를 Markdown으로 저장했습니다.\n\n폴더: {OUTPUT_DIR}"
-            )
         self._set_status(f"내보내기 완료 – {len(success)}개 저장됨. 폴더: {OUTPUT_DIR}")
 
-        # 에디터로 생성된 파일 열기
+        # 에디터로 생성된 파일 열기: PPTX는 PowerPoint, 나머지는 VS Code
         for _title, fpath in success:
             try:
-                subprocess.Popen(["code", str(fpath)], shell=True) # code
+                if fpath.suffix.lower() == ".pptx":
+                    self._open_with_powerpoint(fpath)
+                else:
+                    subprocess.Popen(["code", str(fpath)], shell=True) # code
             except Exception:
                 pass
+
+    @staticmethod
+    def _open_with_powerpoint(fpath: Path):
+        """PPTX 파일을 MS Office PowerPoint로 연다."""
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\powerpnt.exe",
+            )
+            ppt_path, _ = winreg.QueryValueEx(key, None)
+            winreg.CloseKey(key)
+            subprocess.Popen([ppt_path, str(fpath)])
+        except OSError:
+            # 레지스트리에서 경로를 찾지 못하면 기본 연결 프로그램으로 연다
+            import os
+            os.startfile(str(fpath))
 
     # ── UI 헬퍼 ───────────────────────────────────────────────────────────────
 
