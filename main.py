@@ -15,6 +15,202 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, font as tkfont
 
+# ---------------------------------------------------------------------------
+# Flat modern ttk theme + 시스템 폰트 통일
+# 모든 위젯 폰트는 OS 시스템 폰트(TkDefaultFont 패밀리)에서 파생된
+# App* 네임드 폰트만 사용한다. ("", 9) / "TkDefaultFont" 혼용 금지.
+# ---------------------------------------------------------------------------
+APP_BG = "#f3f4f6"
+APP_CARD_BG = "#ffffff"
+APP_BORDER = "#e5e7eb"
+APP_TEXT = "#1f2937"
+APP_MUTED = "#6b7280"
+APP_ACCENT = "#059669"
+APP_ACCENT_DARK = "#047857"
+APP_ACCENT_BG = "#d1fae5"
+APP_ACCENT_FG = "#065f46"
+APP_BTN_BG = "#e5e7eb"
+APP_BTN_BG_ACTIVE = "#d1d5db"
+
+
+def _normalize_font_family(family: str, root=None) -> str:
+    """웨이트 서픽스(Medium 등)가 붙은 패밀리명을 정규화한다.
+
+    예: "Noto Sans KR Medium" -> "Noto Sans KR".
+    서픽스형 패밀리는 Tk에서 -weight bold가 무시되므로, 베이스 패밀리로
+    바꿔야 bold/normal을 제대로 표현할 수 있다.
+    """
+    base = (family or "").strip()
+    suffixes = {"thin", "extralight", "light", "regular", "book", "roman",
+                "medium", "semibold", "demibold", "bold", "black", "heavy"}
+    parts = base.split()
+    while len(parts) > 1 and parts[-1].lower() in suffixes:
+        parts.pop()
+    candidate = " ".join(parts)
+    if candidate and candidate.lower() != base.lower():
+        try:
+            fams = tkfont.families(root) if root is not None else tkfont.families()
+            if candidate in set(fams):
+                return candidate
+        except Exception:
+            pass
+    return base
+
+
+def _get_system_font_family(root=None) -> str:
+    """OS 시스템 폰트 패밀리명을 반환한다 (실패 시 Segoe UI)."""
+    try:
+        if root is not None:
+            raw = tkfont.nametofont("TkDefaultFont", root).actual("family")
+        else:
+            raw = tkfont.nametofont("TkDefaultFont").actual("family")
+        return _normalize_font_family(raw, root)
+    except Exception:
+        return "Segoe UI"
+
+
+# 네임드 폰트 영구 참조 보관소.
+# tkinter Font 객체가 GC되면 Tcl 폰트까지 함께 삭제되므로 반드시 보관해야 한다.
+_APP_FONTS: dict = {}
+
+
+def _ensure_named_font(name: str, family: str, size: int, weight: str = "normal"):
+    if name in _APP_FONTS:
+        try:
+            _APP_FONTS[name].configure(family=family, size=size, weight=weight)
+        except Exception:
+            pass
+        return _APP_FONTS[name]
+    try:
+        f = tkfont.nametofont(name)
+        f.configure(family=family, size=size, weight=weight)
+        _APP_FONTS[name] = f
+        return f
+    except Exception:
+        f = tkfont.Font(name=name, family=family, size=size, weight=weight)
+        _APP_FONTS[name] = f
+        return f
+
+
+def setup_modern_ttk_style(root) -> str:
+    """clam 기반 flat modern 스타일을 적용하고 시스템 폰트를 통일한다.
+
+    Returns:
+        확정된 시스템 폰트 패밀리명.
+    """
+    family = _get_system_font_family(root)
+
+    # 시스템 폰트 기반 네임드 폰트 (앱 전체가 이것만 사용)
+    _ensure_named_font("AppDefault", family, 10)
+    _ensure_named_font("AppBold", family, 10, "bold")
+    _ensure_named_font("AppSmall", family, 9)
+    _ensure_named_font("AppSmallBold", family, 9, "bold")
+    _ensure_named_font("AppTiny", family, 8)
+    _ensure_named_font("AppSubtitle", family, 11, "bold")
+    _ensure_named_font("AppTitle", family, 14, "bold")
+    _ensure_named_font("AppLarge", family, 16, "bold")
+
+    # 폰트가 지정되지 않은 모든 위젯의 기본값 = 시스템 폰트
+    try:
+        root.option_add("*Font", "AppDefault")
+    except Exception:
+        pass
+
+    root.configure(bg=APP_BG)
+
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+
+    # 기본 컨테이너 / 라벨 (flat)
+    style.configure("TFrame", background=APP_BG, borderwidth=0)
+    style.configure("Card.TFrame", background=APP_CARD_BG, borderwidth=1,
+                    relief="solid", bordercolor=APP_BORDER)
+    style.configure("TLabel", background=APP_BG, foreground=APP_TEXT, font="AppDefault")
+    style.configure("Card.TLabel", background=APP_CARD_BG, foreground=APP_TEXT, font="AppDefault")
+    style.configure("Title.TLabel", background=APP_BG, foreground=APP_ACCENT, font="AppTitle")
+    style.configure("Subtitle.TLabel", background=APP_CARD_BG, foreground=APP_TEXT, font="AppSubtitle")
+    style.configure("Muted.TLabel", background=APP_BG, foreground=APP_MUTED, font="AppDefault")
+    style.configure("CardMuted.TLabel", background=APP_CARD_BG, foreground=APP_MUTED, font="AppTiny")
+
+    # 버튼 (flat, 테두리 없음)
+    style.configure("TButton", background=APP_BTN_BG, foreground=APP_TEXT,
+                    borderwidth=0, relief="flat", focusthickness=0, focuscolor="none",
+                    padding=(10, 6), font="AppDefault")
+    style.map("TButton",
+              background=[("active", APP_BTN_BG_ACTIVE), ("disabled", APP_BG)],
+              foreground=[("disabled", "#9ca3af")])
+    style.configure("Primary.TButton", background=APP_ACCENT, foreground="#ffffff",
+                    borderwidth=0, relief="flat", focusthickness=0, focuscolor="none",
+                    padding=(12, 6), font="AppBold")
+    style.map("Primary.TButton",
+              background=[("active", APP_ACCENT_DARK), ("disabled", APP_BG)],
+              foreground=[("disabled", "#9ca3af")])
+
+    # 입력 위젯 (flat solid 1px)
+    style.configure("TEntry", fieldbackground=APP_CARD_BG, background=APP_CARD_BG,
+                    foreground=APP_TEXT, insertcolor=APP_TEXT,
+                    borderwidth=1, relief="solid", bordercolor=APP_BORDER,
+                    padding=4, font="AppDefault")
+    style.map("TEntry", bordercolor=[("focus", APP_ACCENT)])
+    style.configure("TCombobox", fieldbackground=APP_CARD_BG, background=APP_BTN_BG,
+                    foreground=APP_TEXT, selectbackground=APP_ACCENT_BG,
+                    selectforeground=APP_ACCENT_FG,
+                    borderwidth=1, relief="solid", bordercolor=APP_BORDER,
+                    padding=4, font="AppDefault", arrowsize=14)
+    style.map("TCombobox",
+              fieldbackground=[("readonly", APP_CARD_BG), ("disabled", APP_BG)],
+              foreground=[("disabled", "#9ca3af")],
+              bordercolor=[("focus", APP_ACCENT)])
+    try:
+        root.option_add("*TCombobox*Listbox.background", APP_CARD_BG)
+        root.option_add("*TCombobox*Listbox.foreground", APP_TEXT)
+        root.option_add("*TCombobox*Listbox.selectBackground", APP_ACCENT_BG)
+        root.option_add("*TCombobox*Listbox.selectForeground", APP_ACCENT_FG)
+        root.option_add("*TCombobox*Listbox.font", "AppDefault")
+    except Exception:
+        pass
+    style.configure("TSpinbox", fieldbackground=APP_CARD_BG, background=APP_CARD_BG,
+                    foreground=APP_TEXT, insertcolor=APP_TEXT,
+                    borderwidth=1, relief="solid", bordercolor=APP_BORDER,
+                    padding=4, font="AppLarge", arrowsize=12)
+
+    # Treeview (flat 헤더 + 넓은 행간)
+    style.configure("Treeview", background=APP_CARD_BG, fieldbackground=APP_CARD_BG,
+                    foreground=APP_TEXT, font="AppDefault", rowheight=24,
+                    borderwidth=0, relief="flat")
+    style.configure("Treeview.Heading", background=APP_BG, foreground="#374151",
+                    font="AppBold", relief="flat", borderwidth=0, padding=6)
+    style.map("Treeview.Heading", background=[("active", APP_BTN_BG_ACTIVE)])
+    style.map("Treeview",
+              background=[("selected", APP_ACCENT_BG)],
+              foreground=[("selected", APP_ACCENT_FG)])
+    style.configure("TScrollbar", troughcolor=APP_BG, background="#d1d5db",
+                    bordercolor=APP_BG, lightcolor="#d1d5db", darkcolor="#d1d5db",
+                    arrowcolor="#4b5563", gripcount=0, arrowsize=11, relief="flat")
+
+    # 달력 날짜 셀 (ttk 버튼 스타일)
+    style.configure("Calendar.TButton", background=APP_CARD_BG, foreground=APP_TEXT,
+                    borderwidth=0, relief="flat", focusthickness=0, focuscolor="none",
+                    padding=2, font="AppSmall", anchor="center")
+    style.map("Calendar.TButton", background=[("active", APP_BTN_BG_ACTIVE)])
+    style.configure("CalendarSat.TButton", background=APP_CARD_BG, foreground="#2563eb",
+                    borderwidth=0, relief="flat", focusthickness=0, focuscolor="none",
+                    padding=2, font="AppSmall", anchor="center")
+    style.map("CalendarSat.TButton", background=[("active", "#dbeafe")])
+    style.configure("CalendarSun.TButton", background=APP_CARD_BG, foreground="#dc2626",
+                    borderwidth=0, relief="flat", focusthickness=0, focuscolor="none",
+                    padding=2, font="AppSmall", anchor="center")
+    style.map("CalendarSun.TButton", background=[("active", "#fee2e2")])
+    style.configure("CalendarSelected.TButton", background=APP_ACCENT, foreground="#ffffff",
+                    borderwidth=0, relief="flat", focusthickness=0, focuscolor="none",
+                    padding=2, font="AppSmallBold", anchor="center")
+    style.map("CalendarSelected.TButton", background=[("active", APP_ACCENT_DARK)])
+
+    return family
+
 BASE_URL = "https://higen-rnd.atlassian.net/rest/api/3/"
 AGILE_BASE = "https://higen-rnd.atlassian.net/rest/agile/1.0/"
 
@@ -450,6 +646,7 @@ class DatePickerDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
+        self.configure(bg=APP_BG)
         
         # Center the dialog on parent
         parent_x = parent.winfo_rootx()
@@ -481,7 +678,7 @@ class DatePickerDialog(tk.Toplevel):
         self.btn_prev = ttk.Button(header_frm, text="<", width=3, command=self._prev_month)
         self.btn_prev.pack(side=tk.LEFT)
         
-        self.lbl_month = ttk.Label(header_frm, text="", font=("", 10, "bold"), anchor="center")
+        self.lbl_month = ttk.Label(header_frm, text="", font="AppBold", anchor="center")
         self.lbl_month.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         self.btn_next = ttk.Button(header_frm, text=">", width=3, command=self._next_month)
@@ -496,7 +693,7 @@ class DatePickerDialog(tk.Toplevel):
             
         days_headers = ["월", "화", "수", "목", "금", "토", "일"]
         for i, d in enumerate(days_headers):
-            lbl = ttk.Label(week_frm, text=d, anchor="center", font=("", 9, "bold"))
+            lbl = ttk.Label(week_frm, text=d, anchor="center", font="AppSmallBold")
             lbl.grid(row=0, column=i, padx=1, pady=1, sticky="nsew")
             if d == "토":
                 lbl.configure(foreground="blue")
@@ -515,7 +712,7 @@ class DatePickerDialog(tk.Toplevel):
         # Bottom buttons
         btn_frm = ttk.Frame(self, padding=5)
         btn_frm.pack(fill=tk.X)
-        ttk.Button(btn_frm, text="선택", command=self._confirm).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        ttk.Button(btn_frm, text="선택", style="Primary.TButton", command=self._confirm).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
         ttk.Button(btn_frm, text="취소", command=self.destroy).pack(side=tk.RIGHT, padx=5, expand=True, fill=tk.X)
         
     def _draw_calendar(self):
@@ -536,29 +733,25 @@ class DatePickerDialog(tk.Toplevel):
                     lbl = ttk.Label(self.grid_frm, text="")
                     lbl.grid(row=r_idx, column=c_idx, padx=1, pady=1, sticky="nsew")
                 else:
-                    btn = tk.Button(
-                        self.grid_frm, 
-                        text=str(day), 
-                        relief="flat", 
-                        bg="#fcfcfc",
-                        activebackground="#dcdcdc",
-                        font=("", 9)
-                    )
-                    
                     is_selected = (
                         self.selected_date.year == self.current_year and
                         self.selected_date.month == self.current_month and
                         self.selected_date.day == day
                     )
                     if is_selected:
-                        btn.configure(bg="#0078d7", fg="white", activebackground="#005a9e", activeforeground="white")
+                        day_style = "CalendarSelected.TButton"
+                    elif c_idx == 5:  # Saturday
+                        day_style = "CalendarSat.TButton"
+                    elif c_idx == 6:  # Sunday
+                        day_style = "CalendarSun.TButton"
                     else:
-                        if c_idx == 5: # Saturday
-                            btn.configure(fg="blue")
-                        elif c_idx == 6: # Sunday
-                            btn.configure(fg="red")
-                            
-                    btn.configure(command=lambda d=day: self._select_day(d))
+                        day_style = "Calendar.TButton"
+                    btn = ttk.Button(
+                        self.grid_frm,
+                        text=str(day),
+                        style=day_style,
+                        command=lambda d=day: self._select_day(d),
+                    )
                     btn.bind("<Double-Button-1>", lambda event, d=day: self._on_day_double_click(d))
                     btn.grid(row=r_idx, column=c_idx, padx=1, pady=1, sticky="nsew")
                     
@@ -598,6 +791,7 @@ class TimePickerDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
+        self.configure(bg=APP_BG)
         
         parent_x = parent.winfo_rootx()
         parent_y = parent.winfo_rooty()
@@ -630,23 +824,23 @@ class TimePickerDialog(tk.Toplevel):
             from_=0, to=23, 
             width=3, 
             format="%02.0f", 
-            font=("", 16, "bold"),
+            font="AppLarge",
             justify="center",
             wrap=True
         )
         self.sp_hour.pack(side=tk.LEFT, padx=5)
         self.sp_hour.set(f"{self.selected_time.hour:02d}")
         
-        lbl_sep = ttk.Label(picker_frm, text=":", font=("", 16, "bold"))
+        lbl_sep = ttk.Label(picker_frm, text=":", font="AppLarge")
         lbl_sep.pack(side=tk.LEFT, padx=2)
         
         # Spinbox for Minute
         self.sp_min = ttk.Spinbox(
-            picker_frm, 
-            from_=0, to=59, 
-            width=3, 
-            format="%02.0f", 
-            font=("", 16, "bold"),
+            picker_frm,
+            from_=0, to=59,
+            width=3,
+            format="%02.0f",
+            font="AppLarge",
             justify="center",
             wrap=True
         )
@@ -665,7 +859,7 @@ class TimePickerDialog(tk.Toplevel):
         # Bottom buttons
         btn_frm = ttk.Frame(main_frm)
         btn_frm.pack(fill=tk.X, pady=(10, 0))
-        ttk.Button(btn_frm, text="선택", command=self._confirm).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        ttk.Button(btn_frm, text="선택", style="Primary.TButton", command=self._confirm).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
         ttk.Button(btn_frm, text="취소", command=self.destroy).pack(side=tk.RIGHT, padx=5, expand=True, fill=tk.X)
         
     def _adjust_minutes(self, offset):
@@ -731,6 +925,7 @@ class LogWorkDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
+        self.configure(bg=APP_BG)
 
         parent_x = parent.winfo_rootx()
         parent_y = parent.winfo_rooty()
@@ -755,7 +950,7 @@ class LogWorkDialog(tk.Toplevel):
         frm = ttk.Frame(self, padding=(12, 12, 12, 12))
         frm.pack(fill=tk.BOTH, expand=True)
 
-        issue_lbl = ttk.Label(frm, text=f"Issue: {self._issue_key}", font=("", 10, "bold"))
+        issue_lbl = ttk.Label(frm, text=f"Issue: {self._issue_key}", font="AppBold")
         issue_lbl.pack(anchor=tk.W, pady=(0, 10))
 
         row1 = ttk.Frame(frm)
@@ -775,14 +970,17 @@ class LogWorkDialog(tk.Toplevel):
         self.btn_pick_date.pack(side=tk.LEFT)
 
         ttk.Label(frm, text="Work description:").pack(anchor=tk.W, pady=(10, 2))
-        self.txt_comment = tk.Text(frm, width=48, height=3, font="TkDefaultFont")
+        self.txt_comment = tk.Text(frm, width=48, height=3, font="AppDefault",
+                                   relief="flat", highlightthickness=1,
+                                   highlightbackground=APP_BORDER, highlightcolor=APP_ACCENT,
+                                   background=APP_CARD_BG, foreground=APP_TEXT)
         self.txt_comment.pack(fill=tk.X)
         if self._initial_comment:
             self.txt_comment.insert("1.0", self._initial_comment + " ")
 
         btn_frame = ttk.Frame(frm)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
-        ttk.Button(btn_frame, text="Create", command=self._confirm).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(btn_frame, text="Create", style="Primary.TButton", command=self._confirm).pack(side=tk.RIGHT, padx=(5, 0))
         ttk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
 
     def _pick_datetime(self):
@@ -820,6 +1018,7 @@ class AddWorkItemDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
+        self.configure(bg=APP_BG)
 
         parent_x = parent.winfo_rootx()
         parent_y = parent.winfo_rooty()
@@ -842,7 +1041,7 @@ class AddWorkItemDialog(tk.Toplevel):
         frm = ttk.Frame(self, padding=(12, 12, 12, 12))
         frm.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(frm, text=f"Project: {self._project_key}", font=("", 10, "bold")).pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(frm, text=f"Project: {self._project_key}", font="AppBold").pack(anchor=tk.W, pady=(0, 10))
 
         row1 = ttk.Frame(frm)
         row1.pack(fill=tk.X, pady=(0, 5))
@@ -886,12 +1085,12 @@ class AddWorkItemDialog(tk.Toplevel):
         self.btn_clear_due.pack(side=tk.LEFT, padx=(5, 0))
 
         info_lbl = ttk.Label(frm, text="Assignee와 Team은 현재 로그인 사용자 기준으로 자동 할당됩니다.",
-                             foreground="gray", font=("", 8))
+                             foreground="gray", font="AppTiny")
         info_lbl.pack(anchor=tk.W, pady=(5, 10))
 
         btn_frame = ttk.Frame(frm)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(5, 0))
-        ttk.Button(btn_frame, text="OK", command=self._confirm).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(btn_frame, text="OK", style="Primary.TButton", command=self._confirm).pack(side=tk.RIGHT, padx=(5, 0))
         ttk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
 
     def _pick_start_date(self):
@@ -940,6 +1139,7 @@ class LogWorkPopup(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
+        self.configure(bg=APP_BG)
 
         parent_x = parent.winfo_rootx()
         parent_y = parent.winfo_rooty()
@@ -980,14 +1180,14 @@ class LogWorkPopup(tk.Toplevel):
         self.cbo_issues.pack(fill=tk.X, pady=(2, 10))
         self.cbo_issues.bind("<<ComboboxSelected>>", self._on_issue_select)
 
-        self.lbl_status = ttk.Label(frm, text="", foreground="gray", font=("", 8))
+        self.lbl_status = ttk.Label(frm, text="", foreground="gray", font="AppTiny")
         self.lbl_status.pack(anchor=tk.W, pady=(0, 5))
 
         btn_frame = ttk.Frame(frm)
         btn_frame.pack(fill=tk.X, pady=(5, 0))
         self.btn_add_work_item = ttk.Button(btn_frame, text="Add Work Item", command=self._on_add_work_item)
         self.btn_add_work_item.pack(side=tk.LEFT)
-        self.btn_log = ttk.Button(btn_frame, text="Log Work", command=self._on_log_work, state=tk.DISABLED)
+        self.btn_log = ttk.Button(btn_frame, text="Log Work", style="Primary.TButton", command=self._on_log_work, state=tk.DISABLED)
         self.btn_log.pack(side=tk.RIGHT)
 
     def _load_projects(self):
@@ -1321,6 +1521,7 @@ class JiraMemberAdderDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
+        self.configure(bg=APP_BG)
 
         parent_x = parent.winfo_rootx()
         parent_y = parent.winfo_rooty()
@@ -1340,7 +1541,7 @@ class JiraMemberAdderDialog(tk.Toplevel):
         frm = ttk.Frame(self, padding=(20, 15, 20, 15))
         frm.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(frm, text="Jira Member Adder - 최초 인증 설정", font=("TkDefaultFont", 11, "bold")).pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(frm, text="Jira Member Adder - 최초 인증 설정", font="AppSubtitle").pack(anchor=tk.W, pady=(0, 10))
 
         ttk.Label(frm, text="Jira API Email:").pack(anchor=tk.W)
         self.entry_email = ttk.Entry(frm, width=50)
@@ -1359,7 +1560,7 @@ class JiraMemberAdderDialog(tk.Toplevel):
 
         btn_frame = ttk.Frame(frm)
         btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
-        ttk.Button(btn_frame, text="저장 및 연결", command=self._on_save).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(btn_frame, text="저장 및 연결", style="Primary.TButton", command=self._on_save).pack(side=tk.RIGHT, padx=(5, 0))
         ttk.Button(btn_frame, text="취소", command=self._on_close).pack(side=tk.RIGHT)
 
     def _on_save(self):
@@ -1401,6 +1602,7 @@ class JiraMemberAdderDialog(tk.Toplevel):
 class JiraWorklogGUI(tk.Tk):
     def __init__(self):
         super().__init__()
+        setup_modern_ttk_style(self)
         self.title("JIRA_WORKLOG 조회 프로그램")
         self.geometry("1000x300")
         self.minsize(600, 300)
@@ -1409,6 +1611,9 @@ class JiraWorklogGUI(tk.Tk):
         self._entry_popup = None
         self._session = None
         self._user_email = ""
+        # 빨간색(작업중) 인디케이터 깜빡임 상태
+        self._blink_on = False
+        self._blink_after_id = None
 
         try:
             self._api_token = read_text("jira_api_token.txt")
@@ -1508,16 +1713,16 @@ class JiraWorklogGUI(tk.Tk):
         self.cbo_users.pack(side=tk.LEFT, padx=(6, 10))
         self.cbo_users.bind("<<ComboboxSelected>>", self._on_user_select)
 
-        self.btn_query = ttk.Button(frm, text="조회", command=self.on_query)
+        self.btn_query = ttk.Button(frm, text="조회", style="Primary.TButton", command=self.on_query)
         self.btn_query.pack(side=tk.LEFT)
-        self.btn_log_work = ttk.Button(frm, text="워크로그추가", command=self.on_log_work)
+        self.btn_log_work = ttk.Button(frm, text="워크로그추가", style="Primary.TButton", command=self.on_log_work)
         self.btn_log_work.pack(side=tk.LEFT, padx=(10, 0))
         self.btn_weekly_draft = ttk.Button(frm, text="주간업무초안", command=self.on_weekly_draft)
         self.btn_weekly_draft.pack(side=tk.LEFT, padx=(10, 0))
         self.btn_weekly = ttk.Button(frm, text="Weekly", command=self.on_weekly)
         self.btn_weekly.pack(side=tk.LEFT, padx=(10, 0))
 
-        self.progress = ttk.Label(frm, text="●", font=("", 16), foreground="green")
+        self.progress = ttk.Label(frm, text="●", font="AppLarge", foreground="green")
         self.progress.pack(side=tk.RIGHT, padx=(10, 0))
 
     def _build_table(self):
@@ -1552,7 +1757,7 @@ class JiraWorklogGUI(tk.Tk):
     def _build_bottom(self):
         frm = ttk.Frame(self, padding=(10, 5, 10, 10))
         frm.pack(side=tk.BOTTOM, fill=tk.X)
-        self.lbl_status = ttk.Label(frm, text="전체합계시간: 0.00 h", font=("TkDefaultFont", 16, "bold"), foreground="red")
+        self.lbl_status = ttk.Label(frm, text="전체합계시간: 0.00 h", font="AppLarge", foreground="red")
         self.lbl_status.pack(side=tk.LEFT)
         self.lbl_hint = ttk.Label(
             frm,
@@ -1861,13 +2066,48 @@ class JiraWorklogGUI(tk.Tk):
         self._lock_ui(False)
         messagebox.showerror("오류", f"처리 중 오류가 발생했습니다:\n{e}")
 
+    def _start_blinking(self, interval_ms: int = 500):
+        """빨간색 인디케이터를 깜빡이기 시작한다 (작업 진행중 표시)."""
+        self._stop_blinking()
+        self._blink_on = True
+        self._blink_tick(interval_ms)
+
+    def _blink_tick(self, interval_ms: int):
+        if not self._blink_on:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+            cur = self.progress.cget("text")
+            self.progress.config(text="" if cur == "●" else "●")
+            self._blink_after_id = self.after(interval_ms, self._blink_tick, interval_ms)
+        except Exception:
+            pass
+
+    def _stop_blinking(self):
+        """깜빡임을 멈추고 인디케이터를 켜진 상태로 복원한다."""
+        self._blink_on = False
+        if self._blink_after_id is not None:
+            try:
+                self.after_cancel(self._blink_after_id)
+            except Exception:
+                pass
+            self._blink_after_id = None
+        try:
+            if self.winfo_exists():
+                self.progress.config(text="●")
+        except Exception:
+            pass
+
     def _lock_ui(self, lock: bool):
         state = tk.DISABLED if lock else tk.NORMAL
         self.btn_query.config(state=state)
         self.btn_log_work.config(state=state)
         if lock:
             self.progress.config(foreground="red")
+            self._start_blinking()
         else:
+            self._stop_blinking()
             self.progress.config(foreground="green")
 
     def _clear_table(self):
@@ -2139,7 +2379,11 @@ class JiraWorklogGUI(tk.Tk):
         win = tk.Toplevel(self)
         win.title(title)
         win.geometry("400x350")
-        text = tk.Text(win, wrap="word", height=14, width=46, font="TkDefaultFont")
+        win.configure(bg=APP_BG)
+        text = tk.Text(win, wrap="word", height=14, width=46, font="AppDefault",
+                       relief="flat", highlightthickness=1,
+                       highlightbackground=APP_BORDER, highlightcolor=APP_ACCENT,
+                       background=APP_CARD_BG, foreground=APP_TEXT)
         text.insert(1.0, msg)
         text.configure(state=tk.DISABLED)
         text.pack(fill=tk.BOTH, expand=True, padx=12, pady=9)
