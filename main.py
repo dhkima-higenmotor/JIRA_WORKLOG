@@ -71,32 +71,54 @@ def fetch_board_issues(sess: requests.Session, board_id: int) -> list[dict]:
         start += len(results)
     return issues
 
+def fetch_project_statuses(sess: requests.Session, project_key: str) -> list[dict]:
+    """프로젝트의 고유 상태 목록을 반환한다. (보드 없는 business/next-gen 등 대응)
+
+    GET /rest/api/3/project/{key}/statuses 응답에서 issueType별 statuses를 모아
+    id 기준으로 중복 제거하고, 첫 등장 순서를 유지한다.
+    각 원소는 {"id": status_id, "name": status_name} 형태이다.
+    """
+    r = sess.get(BASE_URL + f"project/{project_key}/statuses", timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    seen: dict[str, str] = {}
+    ordered: list[dict] = []
+    for issue_type in data if isinstance(data, list) else []:
+        for st in issue_type.get("statuses", []) or []:
+            sid = str(st.get("id", "")).strip()
+            sname = str(st.get("name", "")).strip()
+            if sid and sname and sid not in seen:
+                seen[sid] = sname
+                ordered.append({"id": sid, "name": sname})
+    return ordered
+
+
 def fetch_project_issues(sess: requests.Session, project_key: str) -> list[dict]:
-    issues = []
-    start = 0
-    limit = 100
-    url = BASE_URL + "search"
+    """POST /rest/api/3/search/jql 로 프로젝트 이슈를 조회한다.
+
+    기존 GET /rest/api/3/search 는 Jira Cloud에서 410 Gone 으로 폐지되어
+    항상 빈 목록을 반환했었다. (보드 없는 Space가 엉뚱한 보드 내용을
+    보여주던 근본 원인 중 하나)
+    nextPageToken 기반 페이지네이션을 따른다.
+    """
+    issues: list[dict] = []
+    next_token = None
+    url = BASE_URL + "search/jql"
     while True:
-        try:
-            r = sess.get(
-                url,
-                params={
-                    "jql": f"project = '{project_key}' ORDER BY key DESC",
-                    "startAt": start,
-                    "maxResults": limit,
-                    "fields": "summary,status"
-                },
-                timeout=30
-            )
-            r.raise_for_status()
-            data = r.json()
-            results = data.get("issues", []) or []
-            issues.extend(results)
-            total = data.get("total", len(issues))
-            if start + len(results) >= total or not results:
-                break
-            start += len(results)
-        except Exception:
+        payload: dict = {
+            "jql": f"project = '{project_key}' ORDER BY key DESC",
+            "fields": ["summary", "status"],
+            "maxResults": 100,
+        }
+        if next_token:
+            payload["nextPageToken"] = next_token
+        r = sess.post(url, json=payload, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        results = data.get("issues", []) or []
+        issues.extend(results)
+        next_token = data.get("nextPageToken")
+        if not next_token:
             break
     return issues
 
@@ -1017,17 +1039,42 @@ class LogWorkPopup(tk.Toplevel):
             all_boards = fetch_boards(self._session)
             matching = [b for b in all_boards
                          if b.get("location", {}).get("projectKey", "").upper() == project_key.upper()]
-            if not matching:
-                matching = all_boards
 
-            if not matching:
-                messagebox.showinfo("안내", "접근 가능한 Board가 없습니다.", parent=self)
-                return
-
-            self._board_id = matching[0]["id"]
-            columns = fetch_board_columns(self._session, self._board_id)
-            self._columns = columns
-            col_names = [c.get("name", "") for c in columns]
+            if matching:
+                # 보드가 있는 소프트웨어 프로젝트: 보드 컬럼을 그대로 사용한다.
+                self._board_id = matching[0]["id"]
+                columns = fetch_board_columns(self._session, self._board_id)
+                # 보드 설정의 statuses 에는 id만 있고 name이 없어서
+                # 프로젝트 상태표로 이름을 보완한다. (필터/표시 정확도 향상)
+                try:
+                    status_map = {s["id"]: s["name"] for s in fetch_project_statuses(self._session, project_key)}
+                    for col in columns:
+                        for st in col.get("statuses", []) or []:
+                            if isinstance(st, dict) and st.get("id") and not st.get("name"):
+                                sid = str(st["id"]).strip()
+                                if sid in status_map:
+                                    st["name"] = status_map[sid]
+                except Exception:
+                    pass
+                self._columns = columns
+            else:
+                # 보드가 없는 프로젝트(business/next-gen 등 96개):
+                # 엉뚱한 보드로 fallback 하지 않고, 프로젝트 상태표에서
+                # 컬럼을 직접 구성한다. (A03FIN 버그의 핵심 수정)
+                self._board_id = None
+                proj_statuses = fetch_project_statuses(self._session, project_key)
+                grouped: dict[str, list[dict]] = {}
+                for st in proj_statuses:
+                    grouped.setdefault(st["name"], []).append(st)
+                columns = [
+                    {"name": name, "statuses": [{"id": s["id"], "name": s["name"]} for s in lst]}
+                    for name, lst in grouped.items()
+                ]
+                self._columns = columns
+                if not columns:
+                    messagebox.showinfo("안내", f"'{project_key}' 프로젝트에 사용 가능한 상태(Column)가 없습니다.", parent=self)
+                    return
+            col_names = [c.get("name", "") for c in self._columns]
             self.cbo_columns["values"] = col_names
 
             target_col_idx = -1
@@ -1097,6 +1144,12 @@ class LogWorkPopup(tk.Toplevel):
                     if p_iss.get("key") and p_iss.get("key") not in existing_keys:
                         all_issues.append(p_iss)
                         existing_keys.add(p_iss.get("key"))
+
+            # Safety: 멀티-프로젝트 보드에서도 선택한 Space의 이슈만 표시한다.
+            if project_key:
+                prefix = f"{project_key}-".upper()
+                all_issues = [iss for iss in all_issues
+                              if str(iss.get("key", "")).upper().startswith(prefix)]
 
             filtered = []
             for iss in all_issues:
