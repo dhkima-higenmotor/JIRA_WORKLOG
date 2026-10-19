@@ -769,6 +769,9 @@ class ConfluenceBlogApp(tk.Tk):
         self._spaces: list[dict] = []
         self._posts: list[dict] = []
         self._worker: threading.Thread | None = None
+        # 빨간색(작업중) 인디케이터 깜빡임 상태
+        self._blink_on = False
+        self._blink_after_id = None
 
         self._build_ui()
         self._load_spaces()
@@ -788,7 +791,7 @@ class ConfluenceBlogApp(tk.Tk):
         self.btn_refresh_spaces = ttk.Button(top_frame, text="Space 새로고침", command=self._load_spaces)
         self.btn_refresh_spaces.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.progress = ttk.Label(top_frame, text="●", font=("", 16), foreground="green")
+        self.progress = ttk.Label(top_frame, text="●", font=("TkDefaultFont", 16), foreground="green")
         self.progress.pack(side=tk.RIGHT, padx=(10, 0))
 
         # ── 상태바 ────────────────────────────────────────────────────────
@@ -1068,13 +1071,48 @@ class ConfluenceBlogApp(tk.Tk):
     def _set_status(self, msg: str):
         self.lbl_status.config(text=msg)
 
+    def _start_blinking(self, interval_ms: int = 500):
+        """빨간색 인디케이터를 깜빡이기 시작한다 (작업 진행중 표시)."""
+        self._stop_blinking()
+        self._blink_on = True
+        self._blink_tick(interval_ms)
+
+    def _blink_tick(self, interval_ms: int):
+        if not self._blink_on:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+            cur = self.progress.cget("text")
+            self.progress.config(text="" if cur == "●" else "●")
+            self._blink_after_id = self.after(interval_ms, self._blink_tick, interval_ms)
+        except Exception:
+            pass
+
+    def _stop_blinking(self):
+        """깜빡임을 멈추고 인디케이터를 켜진 상태로 복원한다."""
+        self._blink_on = False
+        if self._blink_after_id is not None:
+            try:
+                self.after_cancel(self._blink_after_id)
+            except Exception:
+                pass
+            self._blink_after_id = None
+        try:
+            if self.winfo_exists():
+                self.progress.config(text="●")
+        except Exception:
+            pass
+
     def _lock_ui(self, lock: bool):
         state = tk.DISABLED if lock else tk.NORMAL
         self.btn_refresh_spaces.config(state=state)
         self.cbo_space.config(state="disabled" if lock else "readonly")
         if lock:
             self.progress.config(foreground="red")
+            self._start_blinking()
         else:
+            self._stop_blinking()
             self.progress.config(foreground="green")
 
     def _is_busy(self) -> bool:
