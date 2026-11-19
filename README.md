@@ -101,10 +101,109 @@ uv sync
 | `weekly.bat` | 실행 파일 | Confluence 블로그 가져오기 프로그램 실행 |
 | `main.py` | 소스 코드 | 업무 로그 조회/수정/등록, 주간업무초안 엑셀 생성 및 최초 인증(`Jira Member Adder`) 설정 통합 GUI 코어 코드 |
 | `weekly/weekly.py` | 소스 코드 | Confluence 블로그 조회 및 MD 변환기 소스 |
+| `atlassian_client.py` | 소스 코드 | Hermes agent용 Jira/Confluence 공용 REST 클라이언트 (인증·조회·쓰기, 토큰 비노출) |
+| `atlassian_cli.py` | 실행 파일 | 위 클라이언트의 명령행 인터페이스 (조회 즉시 실행, 쓰기는 기본 dry-run) |
+| `atlassian_selftest.py` | 검증 | 읽기+쓰기 왕복 자체 점검 (Confluence 개인 스페이스 / Jira 테스트 프로젝트) |
 | `jira_api_token.txt` | 보안 | 발급받은 Jira API Token 저장 파일 (외부 유출 주의) |
 | `jira_api_email.txt` | 인증 | 인증용 사용자의 이메일 주소 저장 파일 |
 | `output/` | 폴더 | 주간업무초안 엑셀 파일(`output/<조회날짜>.xlsx`)이 생성 저장되는 곳 |
 | `weekly/output/` | 폴더 | Confluence에서 내보낸 Markdown 파일들이 저장되는 곳 |
+
+---
+
+## 🤖 Hermes agent 연동 (`atlassian_client.py` / `atlassian_cli.py`)
+
+Hermes agent가 이 PC에서 Jira/Confluence를 직접 조회·분석·작성할 수 있도록 만든 계층입니다. 브라우저 로그인이나 OAuth 없이, 기존 인증 파일(`jira_api_email.txt`, `jira_api_token.txt`)을 그대로 재사용합니다.
+
+### 동작 방식
+
+* 인증: `HTTPBasicAuth(이메일, API 토큰)` 단일 세션을 Jira(`/rest/api/3/`)와 Confluence(`/wiki/rest/api/`)에 공용 사용
+* 토큰 보호: 어떤 출력에도 토큰을 남기지 않고 `auth=dh***@higenrnm.com token_len=192` 형태로만 표시
+* 안전장치: 조회는 즉시 실행, 쓰기(생성/수정/삭제)는 `--apply` 를 줘야 실제 반영 (기본 dry-run)
+* 실행 인터프리터: 반드시 `D:\github\JIRA_WORKLOG\.venv\Scripts\python.exe` 사용 (`requests` 의존)
+
+### 자주 쓰는 명령
+
+```powershell
+$PY = "D:\github\JIRA_WORKLOG\.venv\Scripts\python.exe"
+cd D:\github\JIRA_WORKLOG
+
+# 상태 점검 (인증·권한·도달)
+& $PY atlassian_cli.py health
+
+# Jira 조회
+& $PY atlassian_cli.py jira projects --limit 20
+& $PY atlassian_cli.py jira search --jql "assignee = currentUser() order by updated DESC" --limit 20
+& $PY atlassian_cli.py jira issue A01NH-33
+& $PY atlassian_cli.py jira worklogs A01NH-33
+& $PY atlassian_cli.py jira permissions --project A10ETC
+
+# Jira 쓰기 (먼저 dry-run, 확인 후 --apply)
+& $PY atlassian_cli.py jira add-worklog A01NH-33 --time 2h --comment "설계 검토"
+& $PY atlassian_cli.py jira add-worklog A01NH-33 --time 2h --comment "설계 검토" --apply
+& $PY atlassian_cli.py jira create-issue --project A10ETC --summary "제목" --description "본문"
+& $PY atlassian_cli.py jira comment A01NH-33 --text "코멘트" --apply
+& $PY atlassian_cli.py jira transition A01NH-33 --to "In Progress" --apply
+
+# Confluence 조회
+& $PY atlassian_cli.py conf spaces --limit 20
+& $PY atlassian_cli.py conf search --cql "type=page and space=mech order by lastmodified desc" --limit 10
+& $PY atlassian_cli.py conf page 115409169
+& $PY atlassian_cli.py conf page-by-title --space mech --title "기구1팀"
+& $PY atlassian_cli.py conf children 115409169
+
+# Confluence 쓰기
+& $PY atlassian_cli.py conf create-page --space mech --title "제목" --body-file body.html
+& $PY atlassian_cli.py conf update-page --id 115409169 --title "제목" --body "<p>수정</p>" --apply
+```
+
+전체 옵션은 `& $PY atlassian_cli.py --help`, 하위 명령은 `... jira --help` / `... conf --help` 로 확인합니다.
+
+### Python에서 직접 사용
+
+```python
+import sys
+sys.path.insert(0, r"D:\github\JIRA_WORKLOG")
+from atlassian_client import AtlassianClient
+
+cli = AtlassianClient()
+me = cli.jira_myself()
+issues = cli.jira_search("project = A10ETC order by updated DESC", max_results=50)
+page = cli.confluence_page(115409169)
+html = page["body"]["storage"]["value"]
+
+# 쓰기: dry_run 기본값이 True
+cli.jira_add_worklog("A01NH-33", "1h", comment="검토")            # payload만 반환
+cli.jira_add_worklog("A01NH-33", "1h", comment="검토", dry_run=False)  # 실제 등록
+```
+
+### 자체 검증
+
+```powershell
+& $PY atlassian_selftest.py                                    # Confluence 개인 스페이스 왕복
+& $PY atlassian_selftest.py --project A10ETC --skip-confluence # Jira 왕복 (삭제 권한 필요)
+```
+
+검증 중 만든 페이지/이슈는 자동 삭제됩니다. 대상 프로젝트에 `DELETE_ISSUES` 권한이 없으면 **잔여물을 남기지 않도록 이슈 생성 자체를 생략(SKIP)** 하며, `--force-create` 로만 강제할 수 있습니다.
+
+### 권한 주의 (실측 결과)
+
+Jira 권한은 **프로젝트 단위로 갈립니다.** 전역 `mypermissions` 가 `DELETE_ISSUES: true` 여도 특정 프로젝트에서는 거부될 수 있습니다.
+
+| 프로젝트 | CREATE | EDIT | DELETE |
+| :--- | :--- | :--- | :--- |
+| `A10ETC` `[기구팀] [ETC]` | 허용 | 허용 | **허용** |
+| `A01NH` `[기구팀] [NOAH]` | 허용 | 허용 | **허용** |
+| `A05N58HRA` `[국책과제] [N60]` | 허용 | 허용 | **허용** |
+| `VT` `Visure Test` | 허용 | 허용 | 불가 |
+| `A04RCWS`, `A10MS` | 허용 | 허용 | 불가 |
+
+> [!IMPORTANT]
+> 이슈 삭제가 필요한 자동화는 실행 전에 `jira permissions --project <KEY>` 로 확인하십시오. 권한이 없으면 `DELETE /rest/api/3/issue/{key}` 가 **HTTP 403** 을 반환합니다.
+
+### VT-2 잔여 이슈
+
+초기 검증 과정에서 `VT` 프로젝트에 테스트 이슈 `VT-2` 가 생성되었고, 해당 프로젝트에 삭제 권한이 없어 자동 삭제하지 못했습니다. 요약을 `[자동검증 잔여] ...` 로 바꾸고 상태를 `완료` 로 정리해 두었으니, `Visure Test` 프로젝트 관리자가 직접 삭제해 주십시오.
 
 ---
 
