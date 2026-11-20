@@ -1012,7 +1012,7 @@ class LogWorkDialog(tk.Toplevel):
         self.destroy()
 
 class AddWorkItemDialog(tk.Toplevel):
-    def __init__(self, parent, project_key, members=None, initial_name=""):
+    def __init__(self, parent, project_key, current_user_name="", initial_name=""):
         super().__init__(parent)
         self.title(f"Add Work Item - {project_key}")
         self.transient(parent)
@@ -1025,11 +1025,11 @@ class AddWorkItemDialog(tk.Toplevel):
         parent_w = parent.winfo_width()
         parent_h = parent.winfo_height()
         x = parent_x + (parent_w - 430) // 2
-        y = parent_y + (parent_h - 350) // 2
-        self.geometry(f"430x350+{max(0, x)}+{max(0, y)}")
+        y = parent_y + (parent_h - 260) // 2
+        self.geometry(f"430x260+{max(0, x)}+{max(0, y)}")
 
         self._project_key = project_key
-        self._members = members or []
+        self._current_user_name = (current_user_name or "").strip()
         self._initial_name = initial_name
         self.result = None
 
@@ -1051,21 +1051,6 @@ class AddWorkItemDialog(tk.Toplevel):
         if self._initial_name:
             self.entry_name.insert(0, self._initial_name)
 
-        row2 = ttk.Frame(frm)
-        row2.pack(fill=tk.X, pady=(0, 5))
-        ttk.Label(row2, text="Reporter:", width=13, anchor=tk.W).pack(side=tk.LEFT)
-        self.cbo_reporter = ttk.Combobox(row2, width=37, state="readonly")
-        member_names = [name for name, aid, email in self._members]
-        self.cbo_reporter["values"] = member_names
-        default_idx = 0
-        for i, name in enumerate(member_names):
-            if "이정규" in name:
-                default_idx = i
-                break
-        if member_names:
-            self.cbo_reporter.current(default_idx)
-        self.cbo_reporter.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
         row3 = ttk.Frame(frm)
         row3.pack(fill=tk.X, pady=(0, 5))
         ttk.Label(row3, text="Start date:", width=13, anchor=tk.W).pack(side=tk.LEFT)
@@ -1084,8 +1069,9 @@ class AddWorkItemDialog(tk.Toplevel):
         self.btn_clear_due = ttk.Button(row4, text="지움", command=self._clear_due_date, width=6)
         self.btn_clear_due.pack(side=tk.LEFT, padx=(5, 0))
 
-        info_lbl = ttk.Label(frm, text="Assignee와 Team은 현재 로그인 사용자 기준으로 자동 할당됩니다.",
-                             foreground="gray", font="AppTiny")
+        who = self._current_user_name or "현재 로그인 사용자"
+        info_lbl = ttk.Label(frm, text=f"Reporter, Assignee, Team은 {who} 기준으로 자동 지정됩니다.",
+                             foreground="gray", font="AppTiny", wraplength=390, justify=tk.LEFT)
         info_lbl.pack(anchor=tk.W, pady=(5, 10))
 
         btn_frame = ttk.Frame(frm)
@@ -1113,20 +1099,327 @@ class AddWorkItemDialog(tk.Toplevel):
         if not name:
             messagebox.showerror("오류", "Name을 입력해주세요.", parent=self)
             return
-        reporter_name = self.cbo_reporter.get()
-        reporter_account_id = ""
-        for n, aid, _ in self._members:
-            if n == reporter_name:
-                reporter_account_id = aid
-                break
         self.result = {
             "name": name,
-            "reporter": reporter_name,
-            "reporter_account_id": reporter_account_id,
             "start_date": self.lbl_start.cget("text") or None,
             "due_date": self.lbl_due.cget("text") or None,
         }
         self.destroy()
+
+class SearchSelectDialog(tk.Toplevel):
+    """키워드 검색과 테이블 선택을 제공하는 공용 선택 팝업.
+
+    rows 는 아래 키를 가진 dict 리스트이다.
+      - values: 테이블에 표시할 셀 문자열 튜플
+      - label:  선택 후 원본 위젯에 표시할 문자열 (없으면 values 결합)
+      - search: 검색 대상 문자열 (없으면 values 결합)
+
+    검색은 대소문자를 구분하지 않으며, 공백으로 구분한 여러 키워드는
+    모두 포함(AND)된 항목만 표시한다.
+    """
+
+    def __init__(self, parent, title, columns, rows, initial_index=-1,
+                 empty_text="검색 결과가 없습니다.", hint=None):
+        super().__init__(parent)
+        self.title(title)
+        self.transient(parent)
+        self.grab_set()
+        self.minsize(520, 380)
+        self.configure(bg=APP_BG)
+
+        self.result = None
+        self._all_rows = list(rows)
+        self._columns = list(columns)
+        self._initial_index = initial_index
+        self._last_query = None
+        self._empty_text = empty_text
+        self._visible: list[int] = []
+        self._filter_job = None
+
+        self._place_window(parent)
+        self._build_ui(hint)
+        self._apply_filter(select_index=initial_index)
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.bind("<Escape>", lambda event: self._on_escape())
+
+    def _place_window(self, parent):
+        width, height = 640, 470
+        try:
+            px, py = parent.winfo_rootx(), parent.winfo_rooty()
+            pw, ph = parent.winfo_width(), parent.winfo_height()
+        except Exception:
+            px = py = 0
+            pw = ph = 0
+        if pw > 1:
+            x = px + (pw - width) // 2
+            y = py + (ph - height) // 2
+        else:
+            x = (self.winfo_screenwidth() - width) // 2
+            y = (self.winfo_screenheight() - height) // 3
+        max_x = max(0, self.winfo_screenwidth() - width - 20)
+        max_y = max(0, self.winfo_screenheight() - height - 60)
+        self.geometry(f"{width}x{height}+{max(0, min(x, max_x))}+{max(0, min(y, max_y))}")
+
+    def _build_ui(self, hint):
+        frm = ttk.Frame(self, padding=(12, 12, 12, 12))
+        frm.pack(fill=tk.BOTH, expand=True)
+
+        top = ttk.Frame(frm)
+        top.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(top, text="검색:").pack(side=tk.LEFT)
+        self.entry_search = ttk.Entry(top)
+        self.entry_search.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6))
+        ttk.Button(top, text="지우기", command=self._clear_search).pack(side=tk.LEFT)
+
+        ttk.Label(
+            frm,
+            text=hint or "키워드는 공백으로 구분하면 모두 포함된 항목만 표시됩니다. (대소문자 구분 없음)",
+            foreground=APP_MUTED,
+            font="AppTiny",
+        ).pack(anchor=tk.W, pady=(0, 8))
+
+        table = ttk.Frame(frm)
+        table.pack(fill=tk.BOTH, expand=True)
+        ids = [f"c{i}" for i in range(len(self._columns))]
+        self.tree = ttk.Treeview(table, columns=ids, show="headings", selectmode="browse")
+        for i, col in enumerate(self._columns):
+            self.tree.heading(ids[i], text=col.get("heading", ""), anchor=col.get("anchor", "w"))
+            self.tree.column(
+                ids[i],
+                width=col.get("width", 120),
+                minwidth=col.get("minwidth", 60),
+                anchor=col.get("anchor", "w"),
+                stretch=col.get("stretch", False),
+            )
+        ysb = ttk.Scrollbar(table, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=ysb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        ysb.grid(row=0, column=1, sticky="ns")
+        table.rowconfigure(0, weight=1)
+        table.columnconfigure(0, weight=1)
+
+        footer = ttk.Frame(frm)
+        footer.pack(fill=tk.X, pady=(8, 0))
+        self.lbl_count = ttk.Label(footer, text="", foreground=APP_MUTED, font="AppSmall")
+        self.lbl_count.pack(side=tk.LEFT)
+        ttk.Button(footer, text="선택", style="Primary.TButton", command=self._choose).pack(side=tk.RIGHT)
+        ttk.Button(footer, text="취소", command=self._cancel).pack(side=tk.RIGHT, padx=(0, 6))
+
+        self.entry_search.bind("<KeyRelease>", self._on_query_changed)
+        self.entry_search.bind("<Return>", lambda event: self._choose())
+        self.entry_search.bind("<Down>", lambda event: self._focus_tree())
+        self.tree.bind("<Double-1>", lambda event: self._choose())
+        self.tree.bind("<Return>", lambda event: self._choose())
+        self.after_idle(self._focus_search)
+
+    def _focus_search(self):
+        try:
+            self.entry_search.focus_set()
+        except tk.TclError:
+            pass
+
+    @staticmethod
+    def _haystack(row) -> str:
+        value = row.get("search")
+        if value is None:
+            value = " ".join(str(v) for v in row.get("values", ()))
+        return str(value).casefold()
+
+    @staticmethod
+    def _row_label(row) -> str:
+        if row.get("label"):
+            return str(row["label"])
+        return " ".join(str(v) for v in row.get("values", ()))
+
+    def _on_query_changed(self, event=None):
+        keysym = getattr(event, "keysym", "")
+        if keysym in {"Return", "KP_Enter", "Escape", "Up", "Down"}:
+            return
+        # 목록이 큰 경우(수천 건)에도 타이핑이 끊기지 않도록 잠시 모아서 필터링한다.
+        self._cancel_filter_job()
+        self._filter_job = self.after(120, self._run_filter)
+
+    def _run_filter(self):
+        self._filter_job = None
+        if not self.winfo_exists():
+            return
+        self._apply_filter()
+
+    def _cancel_filter_job(self):
+        if self._filter_job is not None:
+            try:
+                self.after_cancel(self._filter_job)
+            except Exception:
+                pass
+            self._filter_job = None
+
+    def _flush_filter(self):
+        if self._filter_job is None:
+            return
+        self._cancel_filter_job()
+        self._apply_filter()
+
+    def _apply_filter(self, select_index=None):
+        """검색어로 목록을 다시 그리고 적절한 행을 선택한다."""
+        query = self.entry_search.get().strip()
+        tokens = [t for t in re.split(r"\s+", query.casefold()) if t]
+        query_changed = query != self._last_query
+        self._last_query = query
+
+        visible: list[int] = []
+        self.tree.delete(*self.tree.get_children())
+        for idx, row in enumerate(self._all_rows):
+            if tokens and not all(t in self._haystack(row) for t in tokens):
+                continue
+            visible.append(idx)
+            self.tree.insert("", tk.END, iid=str(idx), values=tuple(row.get("values", ())))
+        self._visible = visible
+
+        target = None
+        current = self.tree.selection()
+        if select_index is not None and str(select_index) in self.tree.get_children():
+            target = str(select_index)
+        elif not query_changed and current and current[0] in self.tree.get_children():
+            # 같은 검색어에서 단순 갱신일 때는 기존 선택을 유지한다.
+            target = current[0]
+        elif visible:
+            target = str(visible[0])
+
+        if target is not None:
+            self.tree.selection_set(target)
+            self.tree.focus(target)
+            self.tree.see(target)
+
+        total = len(self._all_rows)
+        found = len(visible)
+        text = f"전체 {total}개 · 검색 결과 {found}개"
+        if tokens and not found:
+            text = f"전체 {total}개 · {self._empty_text}"
+        self.lbl_count.config(text=text)
+        return found
+
+    def _clear_search(self):
+        self._cancel_filter_job()
+        self.entry_search.delete(0, tk.END)
+        self._apply_filter(select_index=self._initial_index)
+        self.entry_search.focus_set()
+
+    def _focus_tree(self):
+        if not self._visible:
+            return "break"
+        self.tree.focus_set()
+        if not self.tree.selection():
+            self.tree.selection_set(str(self._visible[0]))
+            self.tree.focus(str(self._visible[0]))
+        return "break"
+
+    def _on_escape(self):
+        if self.entry_search.get().strip():
+            self._clear_search()
+        else:
+            self._cancel()
+
+    def _choose(self):
+        # Return 직전에 입력한 검색어가 아직 반영되지 않았을 수 있으므로 먼저 반영한다.
+        self._flush_filter()
+        selection = self.tree.selection()
+        if not selection:
+            return "break"
+        self.result = int(selection[0])
+        self.destroy()
+        return "break"
+
+    def _cancel(self):
+        self._cancel_filter_job()
+        self.result = None
+        self.destroy()
+
+
+class SearchSelectField(ttk.Frame):
+    """현재 선택값 표시(읽기 전용 Entry) + [검색] 버튼으로 구성된 선택 위젯.
+
+    버튼(또는 표시 영역 클릭)을 누르면 SearchSelectDialog 가 열리고,
+    키워드로 목록을 좁힌 뒤 테이블에서 항목을 고를 수 있다.
+    """
+
+    def __init__(self, master, title, columns, on_change=None,
+                 hint=None, empty_text="검색 결과가 없습니다."):
+        super().__init__(master)
+        self._title = title
+        self._columns = columns
+        self._on_change = on_change
+        self._hint = hint
+        self._empty_text = empty_text
+        self._rows: list[dict] = []
+        self._index = -1
+        self._var = tk.StringVar(self)
+
+        self.entry = ttk.Entry(self, textvariable=self._var, state="readonly")
+        self.entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.btn = ttk.Button(self, text="검색", width=7, command=self._open)
+        self.btn.pack(side=tk.LEFT, padx=(6, 0))
+
+        self.entry.bind("<ButtonRelease-1>", lambda event: self._open())
+        self.entry.bind("<Return>", lambda event: self._open())
+        self.set_enabled(False)
+
+    @property
+    def rows(self) -> list[dict]:
+        return self._rows
+
+    def set_rows(self, rows, index=-1):
+        self._rows = list(rows)
+        self.set_index(index)
+
+    def set_index(self, index, notify=False):
+        if index is None or not (0 <= index < len(self._rows)):
+            index = -1
+        self._index = index
+        self._var.set(self._row_label(self._rows[index]) if index >= 0 else "")
+        if notify and self._on_change is not None:
+            self._on_change(index)
+
+    def current(self) -> int:
+        return self._index
+
+    def get(self) -> str:
+        return self._var.get()
+
+    def find_index(self, label) -> int:
+        if not label:
+            return -1
+        for i, row in enumerate(self._rows):
+            if self._row_label(row) == label:
+                return i
+        return -1
+
+    def set_enabled(self, enabled: bool):
+        self.entry.configure(state="readonly" if enabled else "disabled")
+        self.btn.configure(state=tk.NORMAL if enabled else tk.DISABLED)
+
+    @staticmethod
+    def _row_label(row) -> str:
+        if row.get("label"):
+            return str(row["label"])
+        return " ".join(str(v) for v in row.get("values", ()))
+
+    def _open(self):
+        if not self._rows or str(self.btn.cget("state")) == str(tk.DISABLED):
+            return "break"
+        dlg = SearchSelectDialog(
+            self.winfo_toplevel(),
+            self._title,
+            self._columns,
+            self._rows,
+            initial_index=self._index,
+            empty_text=self._empty_text,
+            hint=self._hint,
+        )
+        self.wait_window(dlg)
+        if dlg.result is not None:
+            self.set_index(dlg.result, notify=True)
+        return "break"
+
 
 class LogWorkPopup(tk.Toplevel):
     _last_space = None
@@ -1145,9 +1438,9 @@ class LogWorkPopup(tk.Toplevel):
         parent_y = parent.winfo_rooty()
         parent_w = parent.winfo_width()
         parent_h = parent.winfo_height()
-        x = parent_x + (parent_w - 450) // 2
-        y = parent_y + (parent_h - 280) // 2
-        self.geometry(f"450x280+{max(0, x)}+{max(0, y)}")
+        x = parent_x + (parent_w - 560) // 2
+        y = parent_y + (parent_h - 310) // 2
+        self.geometry(f"560x310+{max(0, x)}+{max(0, y)}")
 
         self._session = session
         self._api_token = api_token
@@ -1156,29 +1449,57 @@ class LogWorkPopup(tk.Toplevel):
         self._columns = []
         self._issues = []
         self._board_id = None
+        self._space_idx = -1
+        self._column_idx = -1
+        self._issue_idx = -1
 
         self._build_ui()
         self._load_projects()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self):
-        frm = ttk.Frame(self, padding=(10, 10, 10, 10))
+        frm = ttk.Frame(self, padding=(12, 12, 12, 12))
         frm.pack(fill=tk.BOTH, expand=True)
 
         ttk.Label(frm, text="Spaces:").pack(anchor=tk.W)
-        self.cbo_spaces = ttk.Combobox(frm, width=50, state="readonly")
-        self.cbo_spaces.pack(fill=tk.X, pady=(2, 10))
-        self.cbo_spaces.bind("<<ComboboxSelected>>", self._on_space_select)
+        self.fld_spaces = SearchSelectField(
+            frm,
+            title="Space 선택",
+            columns=[
+                {"heading": "Key", "width": 120},
+                {"heading": "Space 이름", "width": 420, "stretch": True},
+            ],
+            hint="Space Key 또는 이름 일부를 입력하면 바로 찾을 수 있습니다.",
+            on_change=self._on_space_pick,
+        )
+        self.fld_spaces.pack(fill=tk.X, pady=(2, 10))
 
         ttk.Label(frm, text="Column:").pack(anchor=tk.W)
-        self.cbo_columns = ttk.Combobox(frm, width=50, state="readonly")
-        self.cbo_columns.pack(fill=tk.X, pady=(2, 10))
-        self.cbo_columns.bind("<<ComboboxSelected>>", self._on_column_select)
+        self.fld_columns = SearchSelectField(
+            frm,
+            title="Column 선택",
+            columns=[
+                {"heading": "Column", "width": 180},
+                {"heading": "포함 상태(Status)", "width": 380, "stretch": True},
+            ],
+            hint="Column 이름 또는 포함된 상태 이름으로 검색할 수 있습니다.",
+            on_change=self._on_column_pick,
+        )
+        self.fld_columns.pack(fill=tk.X, pady=(2, 10))
 
         ttk.Label(frm, text="Work Item:").pack(anchor=tk.W)
-        self.cbo_issues = ttk.Combobox(frm, width=50, state="readonly")
-        self.cbo_issues.pack(fill=tk.X, pady=(2, 10))
-        self.cbo_issues.bind("<<ComboboxSelected>>", self._on_issue_select)
+        self.fld_issues = SearchSelectField(
+            frm,
+            title="Work Item 선택",
+            columns=[
+                {"heading": "Key", "width": 120},
+                {"heading": "제목", "width": 330, "stretch": True},
+                {"heading": "상태", "width": 110},
+            ],
+            hint="현재 Column 후보 중 이슈 Key 또는 제목 일부로 검색할 수 있습니다.",
+            on_change=self._on_issue_pick,
+        )
+        self.fld_issues.pack(fill=tk.X, pady=(2, 10))
 
         self.lbl_status = ttk.Label(frm, text="", foreground="gray", font="AppTiny")
         self.lbl_status.pack(anchor=tk.W, pady=(0, 5))
@@ -1193,47 +1514,87 @@ class LogWorkPopup(tk.Toplevel):
     def _load_projects(self):
         try:
             self._projects = fetch_projects(self._session)
-            labels = [f"[{p['key']}] {p.get('name', '')}" for p in self._projects]
-            self.cbo_spaces["values"] = labels
+            rows = [
+                {
+                    "values": (p.get("key", ""), p.get("name", "")),
+                    "label": f"[{p.get('key', '')}] {p.get('name', '')}",
+                }
+                for p in self._projects
+            ]
+            self.fld_spaces.set_rows(rows, index=-1)
+            self.fld_spaces.set_enabled(True)
 
-            target_idx = -1
-            if LogWorkPopup._last_space is not None:
-                for i, label in enumerate(labels):
-                    if label == LogWorkPopup._last_space:
-                        target_idx = i
-                        break
-
+            target_idx = self.fld_spaces.find_index(LogWorkPopup._last_space)
             if target_idx < 0:
-                for i, label in enumerate(labels):
+                for i, p in enumerate(self._projects):
+                    label = f"[{p.get('key', '')}] {p.get('name', '')}"
                     if label == "[A10ETC] [기구팀] [ETC]":
                         target_idx = i
                         break
                     elif target_idx < 0 and label.startswith("[A10ETC]"):
                         target_idx = i
 
-            if target_idx < 0 and labels:
+            if target_idx < 0 and rows:
                 target_idx = 0
 
             if target_idx >= 0:
-                self.cbo_spaces.current(target_idx)
-                self._on_space_select()
+                self.fld_spaces.set_index(target_idx, notify=False)
+                self._on_space_pick(target_idx)
         except Exception as e:
             messagebox.showerror("오류", f"Project 목록을 불러오지 못했습니다:\n{e}", parent=self)
             self.destroy()
 
-    def _on_space_select(self, event=None):
-        idx = self.cbo_spaces.current()
-        if idx < 0:
-            return
-        project = self._projects[idx]
-        project_key = project["key"]
-        LogWorkPopup._last_space = self.cbo_spaces.get()
+    @staticmethod
+    def _column_row(col) -> dict:
+        """Column 목록을 검색 팝업용 행(dict)으로 변환한다."""
+        name = str(col.get("name", "")).strip()
+        status_names: list[str] = []
+        for st in col.get("statuses", []) or []:
+            if isinstance(st, dict):
+                sname = str(st.get("name", "")).strip()
+                if sname:
+                    status_names.append(sname)
+        status_names = list(dict.fromkeys(status_names))
+        return {
+            "values": (name, ", ".join(status_names) or "-"),
+            "label": name,
+            "search": " ".join([name] + status_names),
+        }
 
-        self.cbo_columns["values"] = []
-        self.cbo_columns.set("")
-        self.cbo_issues["values"] = []
-        self.cbo_issues.set("")
+    @staticmethod
+    def _issue_row(iss) -> dict:
+        """Jira 이슈를 검색 팝업용 행(dict)으로 변환한다."""
+        key = str(iss.get("key", ""))
+        fields = iss.get("fields", {}) or {}
+        summary = str(fields.get("summary", "") or "")
+        status_name = str((fields.get("status") or {}).get("name", "") or "")
+        return {
+            "values": (key, summary, status_name),
+            "label": f"{key}: {summary}",
+            "search": " ".join([key, summary, status_name]),
+        }
+
+    def _on_space_pick(self, index):
+        if index is None or not (0 <= index < len(self._projects)):
+            return
+        self._space_idx = index
+        project = self._projects[index]
+        project_key = project.get("key", "")
+        LogWorkPopup._last_space = self.fld_spaces.get()
+
+        # Space가 바뀌면 Column/Work Item 선택을 초기화한다.
+        self._board_id = None
+        self._columns = []
+        self._column_idx = -1
+        self._issues = []
+        self._issue_idx = -1
+        self.fld_columns.set_rows([], index=-1)
+        self.fld_columns.set_enabled(False)
+        self.fld_issues.set_rows([], index=-1)
+        self.fld_issues.set_enabled(False)
         self.btn_log.config(state=tk.DISABLED)
+        self.lbl_status.config(text="Column 정보를 불러오는 중...")
+        self.update_idletasks()
 
         try:
             all_boards = fetch_boards(self._session)
@@ -1272,42 +1633,40 @@ class LogWorkPopup(tk.Toplevel):
                 ]
                 self._columns = columns
                 if not columns:
+                    self.lbl_status.config(text="")
                     messagebox.showinfo("안내", f"'{project_key}' 프로젝트에 사용 가능한 상태(Column)가 없습니다.", parent=self)
                     return
-            col_names = [c.get("name", "") for c in self._columns]
-            self.cbo_columns["values"] = col_names
 
-            target_col_idx = -1
-            if LogWorkPopup._last_column is not None:
-                for i, name in enumerate(col_names):
-                    if name == LogWorkPopup._last_column:
-                        target_col_idx = i
-                        break
+            col_rows = [self._column_row(c) for c in self._columns]
+            self.fld_columns.set_rows(col_rows, index=-1)
+            self.fld_columns.set_enabled(True)
 
+            target_col_idx = self.fld_columns.find_index(LogWorkPopup._last_column)
             if target_col_idx < 0:
-                for i, name in enumerate(col_names):
+                for i, name in enumerate([c.get("name", "") for c in self._columns]):
                     name_clean = name.replace(" ", "").lower()
                     if name == "In Progress" or name_clean == "inprogress":
                         target_col_idx = i
                         break
 
-            if target_col_idx < 0 and col_names:
+            if target_col_idx < 0 and col_rows:
                 target_col_idx = 0
 
             if target_col_idx >= 0:
-                self.cbo_columns.current(target_col_idx)
-                self._on_column_select()
+                self.fld_columns.set_index(target_col_idx, notify=False)
+                self._on_column_pick(target_col_idx)
         except Exception as e:
+            self.lbl_status.config(text="")
             messagebox.showerror("오류", f"Board/Column 정보를 불러오지 못했습니다:\n{e}", parent=self)
 
-    def _on_column_select(self, event=None):
-        col_idx = self.cbo_columns.current()
-        if col_idx < 0:
+    def _on_column_pick(self, index):
+        if index is None or not (0 <= index < len(self._columns)):
             return
 
-        LogWorkPopup._last_column = self.cbo_columns.get()
+        self._column_idx = index
+        LogWorkPopup._last_column = self.fld_columns.get()
 
-        col = self._columns[col_idx]
+        col = self._columns[index]
         col_name = col.get("name", "").strip()
         raw_statuses = col.get("statuses", [])
         col_status_ids = set()
@@ -1321,15 +1680,18 @@ class LogWorkPopup(tk.Toplevel):
                 if sn:
                     col_status_names.add(str(sn).strip().lower())
 
-        self.cbo_issues["values"] = []
-        self.cbo_issues.set("")
+        self._issue_idx = -1
+        self._issues = []
+        self.fld_issues.set_rows([], index=-1)
+        self.fld_issues.set_enabled(False)
         self.btn_log.config(state=tk.DISABLED)
-        if hasattr(self, 'lbl_status'):
-            self.lbl_status.config(text="")
+        self.lbl_status.config(text="Work Item 목록을 불러오는 중...")
+        self.update_idletasks()
 
         try:
-            space_idx = self.cbo_spaces.current()
-            project_key = self._projects[space_idx]["key"] if space_idx >= 0 and self._projects else ""
+            project_key = ""
+            if 0 <= self._space_idx < len(self._projects):
+                project_key = self._projects[self._space_idx].get("key", "")
 
             # 1. Fetch board issues if board_id exists
             all_issues = []
@@ -1353,7 +1715,7 @@ class LogWorkPopup(tk.Toplevel):
 
             filtered = []
             for iss in all_issues:
-                iss_status_obj = iss.get("fields", {}).get("status", {}) or {}
+                iss_status_obj = (iss.get("fields", {}) or {}).get("status", {}) or {}
                 iss_status_id = str(iss_status_obj.get("id", "")).strip()
                 iss_status_name = str(iss_status_obj.get("name", "")).strip()
                 iss_status_name_lower = iss_status_name.lower()
@@ -1372,7 +1734,7 @@ class LogWorkPopup(tk.Toplevel):
             # Fallback 1: If exact match yielded no issues, check partial match with col_name
             if not filtered and col_name:
                 for iss in all_issues:
-                    iss_status_name = str(iss.get("fields", {}).get("status", {}).get("name", "")).strip().lower()
+                    iss_status_name = str(((iss.get("fields", {}) or {}).get("status", {}) or {}).get("name", "")).strip().lower()
                     if col_name.lower() in iss_status_name or iss_status_name in col_name.lower():
                         filtered.append(iss)
 
@@ -1381,59 +1743,86 @@ class LogWorkPopup(tk.Toplevel):
                 filtered = all_issues
 
             self._issues = filtered
-            labels = [f"{iss['key']}: {iss.get('fields', {}).get('summary', '')}" for iss in filtered]
-            self.cbo_issues["values"] = labels
-            if hasattr(self, 'lbl_status'):
-                total = len(all_issues)
-                matched_cnt = len(filtered)
-                status_info = ", ".join(col_status_names) if col_status_names else col_name
-                self.lbl_status.config(text=f"컬럼: {col_name} (상태: {status_info}) | 전체: {total}개 | 표시: {matched_cnt}개")
+            issue_rows = [self._issue_row(iss) for iss in filtered]
+            self.fld_issues.set_rows(issue_rows, index=-1)
+            self.fld_issues.set_enabled(bool(issue_rows))
+
+            total = len(all_issues)
+            matched_cnt = len(filtered)
+            status_info = ", ".join(col_status_names) if col_status_names else col_name
+            self.lbl_status.config(text=f"컬럼: {col_name} (상태: {status_info}) | 전체: {total}개 | 표시: {matched_cnt}개")
         except Exception as e:
+            self.lbl_status.config(text="")
             messagebox.showerror("오류", f"Work Item 목록을 불러오지 못했습니다:\n{e}", parent=self)
 
-        if self.cbo_issues["values"]:
-            restored = False
-            if LogWorkPopup._last_issue is not None:
-                for i, label in enumerate(self.cbo_issues["values"]):
-                    if label == LogWorkPopup._last_issue:
-                        self.cbo_issues.current(i)
-                        restored = True
-                        break
-            if not restored:
-                self.cbo_issues.current(0)
-            self.btn_log.config(state=tk.NORMAL)
+        if self._issues:
+            target_issue_idx = self.fld_issues.find_index(LogWorkPopup._last_issue)
+            if target_issue_idx < 0:
+                target_issue_idx = 0
+            self.fld_issues.set_index(target_issue_idx, notify=False)
+            self._on_issue_pick(target_issue_idx)
 
-    def _on_issue_select(self, event=None):
-        LogWorkPopup._last_issue = self.cbo_issues.get()
+    def _on_issue_pick(self, index):
+        if index is None or not (0 <= index < len(self._issues)):
+            self._issue_idx = -1
+            self.btn_log.config(state=tk.DISABLED)
+            return
+        self._issue_idx = index
+        LogWorkPopup._last_issue = self.fld_issues.get()
+        self.btn_log.config(state=tk.NORMAL)
 
     def _append_issue(self, issue_key, summary):
         self._issues.append({"key": issue_key, "fields": {"summary": summary}})
-        labels = [f"{iss['key']}: {iss.get('fields', {}).get('summary', '')}" for iss in self._issues]
-        self.cbo_issues["values"] = labels
-        for i, label in enumerate(labels):
-            if label.startswith(issue_key):
-                self.cbo_issues.current(i)
-                self.btn_log.config(state=tk.NORMAL)
-                break
-        if hasattr(self, 'lbl_status'):
-            self.lbl_status.config(text=f"표시: {len(labels)}개 (+ 새 항목: {issue_key})")
+        rows = [self._issue_row(iss) for iss in self._issues]
+        self.fld_issues.set_rows(rows, index=-1)
+        self.fld_issues.set_enabled(True)
+        target_idx = next((i for i, iss in enumerate(self._issues) if iss.get("key") == issue_key), -1)
+        if target_idx >= 0:
+            self.fld_issues.set_index(target_idx, notify=False)
+            self._on_issue_pick(target_idx)
+        self.lbl_status.config(text=f"표시: {len(rows)}개 (+ 새 항목: {issue_key})")
 
     def _on_close(self):
-        LogWorkPopup._last_issue = self.cbo_issues.get()
-        LogWorkPopup._last_column = self.cbo_columns.get()
-        LogWorkPopup._last_space = self.cbo_spaces.get()
+        LogWorkPopup._last_issue = self.fld_issues.get() or None
+        LogWorkPopup._last_column = self.fld_columns.get() or None
+        LogWorkPopup._last_space = self.fld_spaces.get() or None
         self.destroy()
 
     def _on_add_work_item(self):
-        idx = self.cbo_spaces.current()
+        idx = self.fld_spaces.current()
         if idx < 0:
             messagebox.showinfo("안내", "Project(Spaces)를 먼저 선택해주세요.", parent=self)
             return
         project_key = self._projects[idx]["key"]
 
-        space_label = self.cbo_spaces.get()
-        members = load_members("members.csv")
-        dlg = AddWorkItemDialog(self, project_key, members=members, initial_name=space_label)
+        space_label = self.fld_spaces.get()
+        # Tk 위젯은 워커 스레드에서 접근하면 안 되므로 필요한 값을 미리 계산한다.
+        col_idx = self.fld_columns.current()
+        target_names = []
+        col_name = ""
+        if col_idx >= 0 and self._board_id is not None:
+            col = self._columns[col_idx]
+            col_name = col.get("name", "")
+            statuses = col.get("statuses", [])
+            target_names = [col_name] + [s.get("name", "") for s in statuses if s.get("name")]
+            target_names = list(dict.fromkeys(target_names))
+
+        # Reporter는 항상 현재 로그인 사용자로 지정한다.
+        current_user_name = ""
+        current_user_account_id = ""
+        try:
+            me = get_myself(self._session)
+            current_user_name = (me.get("displayName") or "").strip()
+            current_user_account_id = me.get("accountId", "") or ""
+        except Exception:
+            pass
+
+        dlg = AddWorkItemDialog(
+            self,
+            project_key,
+            current_user_name=current_user_name,
+            initial_name=space_label,
+        )
         self.wait_window(dlg)
         if dlg.result is None:
             return
@@ -1441,11 +1830,10 @@ class LogWorkPopup(tk.Toplevel):
         name = dlg.result["name"]
         start_date = dlg.result["start_date"]
         due_date = dlg.result["due_date"]
-        reporter_account_id = dlg.result.get("reporter_account_id", "")
 
         def do_create():
             try:
-                account_id = get_current_account_id(self._session)
+                account_id = current_user_account_id or get_current_account_id(self._session)
 
                 result = create_issue_remote(
                     project_key,
@@ -1453,25 +1841,17 @@ class LogWorkPopup(tk.Toplevel):
                     start_date=start_date,
                     due_date=due_date,
                     assignee_account_id=account_id,
-                    reporter_account_id=reporter_account_id,
+                    reporter_account_id=account_id,
                     api_token=self._api_token,
                     user_email=self._user_email,
                 )
                 issue_key = result.get("key", "")
 
-                col_idx = self.cbo_columns.current()
-                target_names = []
-                if col_idx >= 0 and self._board_id is not None:
-                    col = self._columns[col_idx]
-                    col_name = col.get("name", "")
-                    statuses = col.get("statuses", [])
-                    target_names = [col_name] + [s.get("name", "") for s in statuses if s.get("name")]
-                    target_names = list(dict.fromkeys(target_names))
-                    if target_names:
-                        ok = transition_issue_to_status(self._session, issue_key, target_names)
-                        if not ok:
-                            self.after(0, lambda: messagebox.showwarning("알림",
-                                f"'{col_name}' 컬럼으로 이동할 수 없습니다.\n사용 가능한 상태: {target_names}", parent=self))
+                if target_names:
+                    ok = transition_issue_to_status(self._session, issue_key, target_names)
+                    if not ok:
+                        self.after(0, lambda: messagebox.showwarning("알림",
+                            f"'{col_name}' 컬럼으로 이동할 수 없습니다.\n사용 가능한 상태: {target_names}", parent=self))
 
                 self.after(0, lambda: self._append_issue(issue_key, name))
                 self.after(0, lambda: messagebox.showinfo("완료", f"Work Item이 생성되었습니다.\n{issue_key}", parent=self))
@@ -1483,13 +1863,13 @@ class LogWorkPopup(tk.Toplevel):
         threading.Thread(target=do_create, daemon=True).start()
 
     def _on_log_work(self):
-        LogWorkPopup._last_issue = self.cbo_issues.get()
-        idx = self.cbo_issues.current()
+        idx = self.fld_issues.current()
         if idx < 0:
             return
         issue_key = self._issues[idx]["key"]
 
-        issue_label = self.cbo_issues.get()
+        issue_label = self.fld_issues.get()
+        LogWorkPopup._last_issue = issue_label
         dlg = LogWorkDialog(self, issue_key, initial_comment=issue_label)
         self.wait_window(dlg)
         if dlg.result is None:

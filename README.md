@@ -16,7 +16,8 @@ Jira의 업무 로그(Worklog)를 간편하게 조회·수정·등록하고, **�
   * **Started (작업시작일시)**: 달력 및 시간 선택 팝업을 통해 직관적으로 시작 일시를 변경합니다.
   * **TimeSpent (소요시간)**: 셀을 더블클릭하여 시간을 수정하면 Jira에 실시간 적용됩니다 (예: `2h`, `30m`).
   * **Comment (내용)**: 업무 내용을 즉시 수정할 수 있습니다.
-* **워크로그 추가**: `워크로그추가` 버튼을 통해 선택한 Space(`[A10ETC]` 기본 선택, 예: `[A03FIN] [기구팀] [FINGER]`) 및 Column(`In Progress` 기본 선택)의 Work Item에 대한 신규 업무 로그를 간편하게 등록할 수 있습니다. 보드가 있는 소프트웨어 프로젝트는 보드 컬럼을, 보드가 없는 비즈니스 Space는 프로젝트 상태 목록을 Column으로 사용하며, Work Item 목록은 선택한 Space의 이슈로만 필터링됩니다.
+* **워크로그 추가**: `워크로그추가` 버튼을 통해 선택한 Space(`[A10ETC]` 기본 선택, 예: `[A03FIN] [기구팀] [FINGER]`) 및 Column(`In Progress` 기본 선택)의 Work Item에 대한 신규 업무 로그를 간편하게 등록할 수 있습니다. 보드가 있는 소프트웨어 프로젝트는 보드 컬럼을, 보드가 없는 비즈니스 Space는 프로젝트 상태 목록을 Column으로 사용하며, Work Item 목록은 선택한 Space의 이슈로만 필터링됩니다. `Add Work Item`으로 새 항목을 만들 때 Reporter는 현재 로그인 사용자로 자동 지정됩니다.
+* **Space/Column/Work Item 키워드 검색**: 워크로그 추가 팝업의 각 항목은 `검색` 버튼과 표시창으로 구성되어, 버튼을 누르면 **검색어 입력창 + 목록 테이블**이 있는 선택 팝업이 열립니다. Space는 Key/이름, Column은 컬럼명/포함 상태, Work Item은 이슈 Key/제목/상태로 대소문자 구분 없이 검색할 수 있으며, 공백으로 구분한 여러 키워드는 모두 포함(AND)된 항목만 표시됩니다.
 * **이슈 상세 정보 조회**: **Issue Key** 셀을 더블클릭하면 팝업창으로 해당 Jira 이슈의 제목, 상태, 담당자, 설명 등을 시스템 기본 폰트로 바로 확인합니다.
 * **중복 로그 강조**: 시작 시간이 동일하여 중복 기입된 로그는 빨간색으로 표시되어 실수를 방지합니다.
 
@@ -81,7 +82,7 @@ uv sync
 2. **조회 날짜 선택**: `조회날짜` 버튼을 클릭해 달력에서 날짜를 지정합니다 (기본값: 오늘).
 3. **조회**: `조회` 버튼을 누르면 해당 날짜의 업무 로그 목록이 나타납니다.
 4. **수정 및 편집**: **Started / TimeSpent / Comment** 셀을 더블클릭하여 수정 후 Enter를 누르면 Jira 서버에 즉시 동기화됩니다.
-5. **워크로그 추가**: `워크로그추가` 버튼을 누른 뒤 Space → Column → Work Item 순서로 선택하여 신규 업무 로그를 기록합니다.
+5. **워크로그 추가**: `워크로그추가` 버튼을 누른 뒤 Space → Column → Work Item 순서로 선택하여 신규 업무 로그를 기록합니다. 각 항목의 `검색` 버튼을 누르면 목록 팝업이 열리며, 상단 검색창에 Key·이름·제목 일부를 입력해 목록을 좁힌 뒤 테이블에서 선택할 수 있습니다.
 
 ### Step 3: 주간업무초안 엑셀 생성하기
 1. 상단에서 기준이 되는 `조회날짜`를 선택합니다.
@@ -101,10 +102,109 @@ uv sync
 | `weekly.bat` | 실행 파일 | Confluence 블로그 가져오기 프로그램 실행 |
 | `main.py` | 소스 코드 | 업무 로그 조회/수정/등록, 주간업무초안 엑셀 생성 및 최초 인증(`Jira Member Adder`) 설정 통합 GUI 코어 코드 |
 | `weekly/weekly.py` | 소스 코드 | Confluence 블로그 조회 및 MD 변환기 소스 |
+| `atlassian_client.py` | 소스 코드 | Hermes agent용 Jira/Confluence 공용 REST 클라이언트 (인증·조회·쓰기, 토큰 비노출) |
+| `atlassian_cli.py` | 실행 파일 | 위 클라이언트의 명령행 인터페이스 (조회 즉시 실행, 쓰기는 기본 dry-run) |
+| `atlassian_selftest.py` | 검증 | 읽기+쓰기 왕복 자체 점검 (Confluence 개인 스페이스 / Jira 테스트 프로젝트) |
 | `jira_api_token.txt` | 보안 | 발급받은 Jira API Token 저장 파일 (외부 유출 주의) |
 | `jira_api_email.txt` | 인증 | 인증용 사용자의 이메일 주소 저장 파일 |
 | `output/` | 폴더 | 주간업무초안 엑셀 파일(`output/<조회날짜>.xlsx`)이 생성 저장되는 곳 |
 | `weekly/output/` | 폴더 | Confluence에서 내보낸 Markdown 파일들이 저장되는 곳 |
+
+---
+
+## 🤖 Hermes agent 연동 (`atlassian_client.py` / `atlassian_cli.py`)
+
+Hermes agent가 이 PC에서 Jira/Confluence를 직접 조회·분석·작성할 수 있도록 만든 계층입니다. 브라우저 로그인이나 OAuth 없이, 기존 인증 파일(`jira_api_email.txt`, `jira_api_token.txt`)을 그대로 재사용합니다.
+
+### 동작 방식
+
+* 인증: `HTTPBasicAuth(이메일, API 토큰)` 단일 세션을 Jira(`/rest/api/3/`)와 Confluence(`/wiki/rest/api/`)에 공용 사용
+* 토큰 보호: 어떤 출력에도 토큰을 남기지 않고 `auth=dh***@higenrnm.com token_len=192` 형태로만 표시
+* 안전장치: 조회는 즉시 실행, 쓰기(생성/수정/삭제)는 `--apply` 를 줘야 실제 반영 (기본 dry-run)
+* 실행 인터프리터: 반드시 `D:\github\JIRA_WORKLOG\.venv\Scripts\python.exe` 사용 (`requests` 의존)
+
+### 자주 쓰는 명령
+
+```powershell
+$PY = "D:\github\JIRA_WORKLOG\.venv\Scripts\python.exe"
+cd D:\github\JIRA_WORKLOG
+
+# 상태 점검 (인증·권한·도달)
+& $PY atlassian_cli.py health
+
+# Jira 조회
+& $PY atlassian_cli.py jira projects --limit 20
+& $PY atlassian_cli.py jira search --jql "assignee = currentUser() order by updated DESC" --limit 20
+& $PY atlassian_cli.py jira issue A01NH-33
+& $PY atlassian_cli.py jira worklogs A01NH-33
+& $PY atlassian_cli.py jira permissions --project A10ETC
+
+# Jira 쓰기 (먼저 dry-run, 확인 후 --apply)
+& $PY atlassian_cli.py jira add-worklog A01NH-33 --time 2h --comment "설계 검토"
+& $PY atlassian_cli.py jira add-worklog A01NH-33 --time 2h --comment "설계 검토" --apply
+& $PY atlassian_cli.py jira create-issue --project A10ETC --summary "제목" --description "본문"
+& $PY atlassian_cli.py jira comment A01NH-33 --text "코멘트" --apply
+& $PY atlassian_cli.py jira transition A01NH-33 --to "In Progress" --apply
+
+# Confluence 조회
+& $PY atlassian_cli.py conf spaces --limit 20
+& $PY atlassian_cli.py conf search --cql "type=page and space=mech order by lastmodified desc" --limit 10
+& $PY atlassian_cli.py conf page 115409169
+& $PY atlassian_cli.py conf page-by-title --space mech --title "기구1팀"
+& $PY atlassian_cli.py conf children 115409169
+
+# Confluence 쓰기
+& $PY atlassian_cli.py conf create-page --space mech --title "제목" --body-file body.html
+& $PY atlassian_cli.py conf update-page --id 115409169 --title "제목" --body "<p>수정</p>" --apply
+```
+
+전체 옵션은 `& $PY atlassian_cli.py --help`, 하위 명령은 `... jira --help` / `... conf --help` 로 확인합니다.
+
+### Python에서 직접 사용
+
+```python
+import sys
+sys.path.insert(0, r"D:\github\JIRA_WORKLOG")
+from atlassian_client import AtlassianClient
+
+cli = AtlassianClient()
+me = cli.jira_myself()
+issues = cli.jira_search("project = A10ETC order by updated DESC", max_results=50)
+page = cli.confluence_page(115409169)
+html = page["body"]["storage"]["value"]
+
+# 쓰기: dry_run 기본값이 True
+cli.jira_add_worklog("A01NH-33", "1h", comment="검토")            # payload만 반환
+cli.jira_add_worklog("A01NH-33", "1h", comment="검토", dry_run=False)  # 실제 등록
+```
+
+### 자체 검증
+
+```powershell
+& $PY atlassian_selftest.py                                    # Confluence 개인 스페이스 왕복
+& $PY atlassian_selftest.py --project A10ETC --skip-confluence # Jira 왕복 (삭제 권한 필요)
+```
+
+검증 중 만든 페이지/이슈는 자동 삭제됩니다. 대상 프로젝트에 `DELETE_ISSUES` 권한이 없으면 **잔여물을 남기지 않도록 이슈 생성 자체를 생략(SKIP)** 하며, `--force-create` 로만 강제할 수 있습니다.
+
+### 권한 주의 (실측 결과)
+
+Jira 권한은 **프로젝트 단위로 갈립니다.** 전역 `mypermissions` 가 `DELETE_ISSUES: true` 여도 특정 프로젝트에서는 거부될 수 있습니다.
+
+| 프로젝트 | CREATE | EDIT | DELETE |
+| :--- | :--- | :--- | :--- |
+| `A10ETC` `[기구팀] [ETC]` | 허용 | 허용 | **허용** |
+| `A01NH` `[기구팀] [NOAH]` | 허용 | 허용 | **허용** |
+| `A05N58HRA` `[국책과제] [N60]` | 허용 | 허용 | **허용** |
+| `VT` `Visure Test` | 허용 | 허용 | 불가 |
+| `A04RCWS`, `A10MS` | 허용 | 허용 | 불가 |
+
+> [!IMPORTANT]
+> 이슈 삭제가 필요한 자동화는 실행 전에 `jira permissions --project <KEY>` 로 확인하십시오. 권한이 없으면 `DELETE /rest/api/3/issue/{key}` 가 **HTTP 403** 을 반환합니다.
+
+### VT-2 잔여 이슈
+
+초기 검증 과정에서 `VT` 프로젝트에 테스트 이슈 `VT-2` 가 생성되었고, 해당 프로젝트에 삭제 권한이 없어 자동 삭제하지 못했습니다. 요약을 `[자동검증 잔여] ...` 로 바꾸고 상태를 `완료` 로 정리해 두었으니, `Visure Test` 프로젝트 관리자가 직접 삭제해 주십시오.
 
 ---
 
